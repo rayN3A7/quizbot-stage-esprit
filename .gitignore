@@ -1,0 +1,42 @@
+# --- Secrets : ne JAMAIS versionner (.env.example sert de modèle) ---
+.env
+.env.local
+*.env.bak
+
+# --- Environnement virtuel ---
+venv/
+.venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Données générées : régénérables, volumineuses, propres à chaque machine ---
+data/chroma/
+data/uploads/
+data/exports/
+data/quizzes/
+data/results/
+data/documents.json
+data/*.db
+data/*.json.bak
+
+# --- Cache des modèles Hugging Face (plusieurs Go) ---
+.cache/
+models/
+
+# --- Scripts de diagnostic ponctuels ---
+diag_chroma.py
+diag_config.py
+test_local_llm.py
+
+# --- Éditeurs / OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
