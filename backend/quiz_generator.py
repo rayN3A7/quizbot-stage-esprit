@@ -339,6 +339,133 @@ def _salvage_question_objects(text: str) -> list[dict]:
     return objects
 
 
+def _normalize_for_comparison(text: str) -> str:
+    """Normalise le texte pour la comparaison : minuscules, ponctuation → espaces."""
+    text = text.lower()
+    # Remplace la plupart des caractères de ponctuation par des espaces
+    text = re.sub(r'[^\w\s]', ' ', text)
+    # Collapse multiple spaces
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _is_code_like(text: str) -> bool:
+    """Détecte si un texte ressemble à du code (contient tokens Python/programming)."""
+    code_tokens = ['(', '[', 'lambda', 'range', '==', '!=', '**', '"def ', 'def ']
+    return any(token in text for token in code_tokens)
+
+
+def _quality_reject_reason(question: Question, passages: List[dict]) -> str | None:
+    """Vérifie une question et retourne la raison du rejet, ou None si valide.
+
+    Ordre des vérifications : structure d'abord (fast fail), puis contenu.
+    """
+    # --- d) STRUCTURE (fast checks first) ---
+    if question.type == QuestionType.MCQ:
+        if not question.choices or len(question.choices) < 3:
+            return "QCM doit avoir au moins 3 choix"
+        if question.correct_choice_index is None or \
+           question.correct_choice_index < 0 or \
+           question.correct_choice_index >= len(question.choices):
+            return "Index de la réponse correcte hors limites"
+        if any(c is None or c.strip() == "" for c in question.choices):
+            return "Choix vide détecté"
+
+    # --- b) PROMPT ARTIFACTS ---
+    # Détecte les marqueurs de prompt (avec tolérance pour les fautes de frappe du modèle)
+    prompt_markers = re.compile(
+        r'\[PASSAGE[S]?\s*\d+\]'  # [PASSAGE 1], [PASSAGES 2], et variantes
+        r'|\[PASSEAU.*?\]'         # typo observée: [PASSEAU 2]
+        r'|\[PASSEAGE.*?\]'        # typo observée: [PASSEAGE 1]
+        r'|NUM_QUESTIONS'
+        r'|TYPE_QUESTIONS',
+        re.IGNORECASE
+    )
+    if prompt_markers.search(question.question) or \
+       prompt_markers.search(question.reference_answer) or \
+       prompt_markers.search(question.source_excerpt or "") or \
+       (question.choices and any(prompt_markers.search(c) for c in question.choices)):
+        return "Question contient des marqueurs de prompt"
+
+    # --- a) GROUNDING (source_excerpt doit être dans les passages) ---
+    if question.source_excerpt and len(question.source_excerpt.split()) >= 4:
+        excerpt_norm = _normalize_for_comparison(question.source_excerpt)
+        # Combine tous les passages normalisés
+        passages_text = " ".join(p.get("text", "") for p in passages)
+        passages_norm = _normalize_for_comparison(passages_text)
+
+        # Cherche une fenêtre de 6 mots consécutifs
+        excerpt_words = excerpt_norm.split()
+        window_size = min(6, len(excerpt_words))
+        found = False
+        for i in range(len(excerpt_words) - window_size + 1):
+            window = " ".join(excerpt_words[i:i+window_size])
+            if window in passages_norm:
+                found = True
+                break
+        if not found and window_size >= 1:
+            return "Source introuvable dans les passages (grounding failure)"
+
+    # --- c) DEGENERATE CHOICES (pour MCQ) ---
+    if question.type == QuestionType.MCQ and question.choices:
+        choices_str = question.choices
+
+        # BRANCH 1 : Détecte si c'est du code AVANT toute normalization
+        is_code = sum(1 for c in choices_str if _is_code_like(c)) >= len(choices_str) // 2
+
+        if is_code:
+            # Pour du code : compare RAW strings uniquement, rejette exact duplicates
+            if len(set(choices_str)) < len(choices_str):
+                return "Choix en code : doublons exacts détectés"
+        else:
+            # BRANCH 2 : Non-code, peut normaliser
+            normalized_choices = [_normalize_for_comparison(c) for c in choices_str]
+
+            # Rejette exact duplicates après normalisation
+            if len(set(normalized_choices)) < len(normalized_choices):
+                return "Choix : doublons détectés (après normalisation)"
+
+            # Rejette permutations (même ensemble de mots longs)
+            choice_word_sets = [set(c.split()) for c in normalized_choices]
+            for i, set_i in enumerate(choice_word_sets):
+                for j in range(i+1, len(choice_word_sets)):
+                    set_j = choice_word_sets[j]
+                    # Même ensemble de mots (longueur >3) = permutation
+                    long_words_i = {w for w in set_i if len(w) > 3}
+                    long_words_j = {w for w in set_j if len(w) > 3}
+                    if long_words_i and long_words_i == long_words_j:
+                        return "Choix : permutations de mêmes concepts détectées"
+
+            # Rejette si chevauchement moyen > 0.6
+            def word_overlap(set1: set, set2: set) -> float:
+                if not set1 and not set2:
+                    return 0.0
+                intersection = len(set1 & set2)
+                union = len(set1 | set2)
+                return intersection / union if union > 0 else 0.0
+
+            overlaps = []
+            for i in range(len(choice_word_sets)):
+                for j in range(i+1, len(choice_word_sets)):
+                    overlaps.append(word_overlap(choice_word_sets[i], choice_word_sets[j]))
+
+            if overlaps and sum(overlaps) / len(overlaps) > 0.6:
+                return "Choix : chevauchement lexical trop élevé (>0.6 en moyenne)"
+
+    # --- e) INTERNAL CONTRADICTION ---
+    if question.type == QuestionType.MCQ and question.choices and \
+       question.correct_choice_index is not None:
+        answer_text = question.choices[question.correct_choice_index]
+        if "**" in answer_text:
+            # La réponse marquée contient **, vérifie que question ou explication aussi
+            question_has_op = "**" in question.question
+            explanation_has_op = "**" in question.explanation
+            if not question_has_op and not explanation_has_op:
+                return "Contradiction interne : réponse contient **, pas la question/explication"
+
+    return None
+
+
 def _parse_llm_response(raw: str) -> List[Question]:
     # Le modèle peut parfois entourer le JSON de ```json ... ``` malgré la consigne : on nettoie.
     cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
@@ -385,14 +512,54 @@ def _parse_llm_response(raw: str) -> List[Question]:
     return questions
 
 
+def filter_questions_by_quality(questions: List[Question], passages: List[dict]) -> tuple[List[Question], dict]:
+    """Filtre les questions par les critères de qualité et retourne (gardées, raisons_rejet).
+
+    Returns:
+        (kept_questions, rejection_reasons_dict) où rejection_reasons_dict[i] = reason
+        pour chaque question rejetée (indexée par position originale).
+    """
+    kept = []
+    reasons = {}
+    for i, q in enumerate(questions):
+        reason = _quality_reject_reason(q, passages)
+        if reason is None:
+            kept.append(q)
+        else:
+            reasons[i] = reason
+    return kept, reasons
+
+
 def generate_quiz(document_id: str, document_name: str, config: QuizConfig) -> Quiz:
-    """Point d'entrée principal du pipeline RAG : retrieval -> prompt -> LLM -> parsing."""
+    """Point d'entrée principal du pipeline RAG : retrieval -> prompt -> LLM -> parsing.
+
+    Applique les portes de qualité programmatiques pour valider chaque question.
+    """
     passages = _retrieve_passages(document_id, config)
     user_prompt = _build_user_prompt(config, passages)
     raw_response = generate_completion(SYSTEM_PROMPT, user_prompt)
     questions = _parse_llm_response(raw_response)
 
-    # On tronque/complète pour respecter au mieux le nombre de questions demandé.
-    questions = questions[: config.num_questions] if len(questions) > config.num_questions else questions
+    # Applique les portes de qualité programmatiques
+    kept_questions, rejection_reasons = filter_questions_by_quality(questions, passages)
 
-    return Quiz(title=config.title, document_name=document_name, questions=questions)
+    if not kept_questions:
+        # Aucune question n'a survécu aux portes de qualité
+        reasons_summary = "; ".join(set(rejection_reasons.values()))
+        raise LLMError(
+            f"Toutes les questions ont échoué les portes de qualité. "
+            f"Raisons : {reasons_summary}. Réessayez avec un autre document ou d'autres thèmes."
+        )
+
+    # On tronque/complète pour respecter au mieux le nombre de questions demandé.
+    final_questions = kept_questions[: config.num_questions] if len(kept_questions) > config.num_questions else kept_questions
+
+    # Popule le rapport d'activité (utilisé principalement par quiz_agent, mais présent aussi ici)
+    quiz = Quiz(title=config.title, document_name=document_name, questions=final_questions)
+    quiz.agent_report = {
+        "generated": len(questions),
+        "verified_ok_first_try": len(kept_questions),
+        "regenerated": 0,
+        "dropped": len(rejection_reasons),
+    }
+    return quiz
