@@ -11,11 +11,14 @@ testable immédiatement, sans clé API, pendant le développement.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 from abc import ABC, abstractmethod
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
@@ -120,7 +123,7 @@ class LocalLLMProvider(BaseLLMProvider):
                 )
 
             LocalLLMProvider._model_name = None
-            last_error: Exception | None = None
+            failures: list[str] = []
             for model_name in (settings.LOCAL_LLM_MODEL, settings.LOCAL_LLM_FALLBACK_MODEL):
                 if not model_name:
                     continue
@@ -136,7 +139,7 @@ class LocalLLMProvider(BaseLLMProvider):
                     # VRAM insuffisante (ou modèle indisponible) : on libère ce
                     # qui a pu être alloué et on tente le modèle de repli, plutôt
                     # que de laisser l'application inutilisable.
-                    last_error = e
+                    failures.append(f"{model_name} ({type(e).__name__}: {e})")
                     torch.cuda.empty_cache()
                     continue
                 LocalLLMProvider._tokenizer = tokenizer
@@ -145,10 +148,11 @@ class LocalLLMProvider(BaseLLMProvider):
                 break
 
             if LocalLLMProvider._model is None:
-                raise LLMError(
-                    "Impossible de charger un modèle local "
-                    f"({settings.LOCAL_LLM_MODEL}, puis {settings.LOCAL_LLM_FALLBACK_MODEL}). "
-                    f"Dernière erreur : {last_error}"
+                raise LLMError("Impossible de charger un modèle local : " + " ; ".join(failures))
+            if failures:
+                logger.warning(
+                    "Modèle local de repli chargé : %s, à la place de %s",
+                    LocalLLMProvider._model_name, " ; ".join(failures),
                 )
 
         self._tokenizer = LocalLLMProvider._tokenizer
