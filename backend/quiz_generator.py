@@ -78,9 +78,6 @@ Consignes :
 - Chaque question doit indiquer le passage source (source_excerpt).
 - Varie les sous-thèmes si plusieurs passages différents sont fournis.
 
-Passages de cours :
-{passages_block}
-
 --- EXEMPLES DE CALIBRAGE (ne recopie PAS leur contenu, seulement leur esprit) ---
 
 Soit le passage fictif : « La normalisation min-max ramène chaque variable dans
@@ -109,6 +106,9 @@ crédibles d'étudiant sur ce même concept.
 Rappel final : LANGUE = {language}. Rédige TOUTES les questions, tous les choix,
 toutes les réponses et toutes les explications dans cette langue, quelle que
 soit la langue des exemples ci-dessus.
+
+Passages de cours :
+{passages_block}
 """
 
 
