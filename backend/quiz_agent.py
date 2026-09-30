@@ -36,6 +36,7 @@ from .quiz_generator import (
     _build_user_prompt,
     _extract_json_object,
     _parse_llm_response,
+    _quality_reject_reason,
     _retrieve_passages,
 )
 
@@ -100,7 +101,21 @@ def verify_question(question: Question, passages: List[dict]) -> VerificationRes
     """Appelle le LLM-vérificateur pour une question. Ne bloque jamais la
     génération en cas d'échec du vérificateur lui-même (panne fournisseur,
     réponse non parsable) : la question est alors conservée par défaut plutôt
-    que de faire échouer tout le quiz sur un problème d'infrastructure."""
+    que de faire échouer tout le quiz sur un problème d'infrastructure.
+
+    Ordre des vérifications :
+    1. Portes programmatiques (déterministes, répliquables) : appelées EN PREMIER
+    2. LLM vérificateur (peut être sujet à ses propres biais) : appelées après
+
+    Raison : un petit modèle peut valider ses propres erreurs. Les vérifications
+    programmatiques détectent des problèmes structurels que le LLM peut manquer.
+    """
+    # --- Étape 1 : portes programmatiques (avant le LLM) ---
+    quality_reason = _quality_reject_reason(question, passages)
+    if quality_reason is not None:
+        return VerificationResult(valide=False, raison=quality_reason)
+
+    # --- Étape 2 : LLM vérificateur ---
     prompt = _build_verification_prompt(question, passages)
     try:
         raw = generate_completion(VERIFIER_SYSTEM_PROMPT, prompt)

@@ -86,3 +86,61 @@ def test_generate_quiz_agentic_raises_if_no_document_indexed():
     with patch.object(quiz_agent, "_retrieve_passages", side_effect=ValueError("Aucun passage indexé")):
         with pytest.raises(ValueError):
             quiz_agent.generate_quiz_agentic("empty_doc", "vide.pdf", config)
+
+
+# --------------------------------------------------------------------------- #
+# Intégration des portes de qualité programmatiques dans verify_question
+# --------------------------------------------------------------------------- #
+
+def test_verify_question_rejects_ungrounded_source():
+    """Les portes programmatiques rejettent une question avec source non fondée,
+    sans appel au LLM vérificateur."""
+    question = Question(
+        type="ouverte",
+        question="Qu'est-ce que quelque chose d'inventé?",
+        reference_answer="Une réponse",
+        source_excerpt="Quelque chose qui n'existe dans aucun passage fourni",
+    )
+    result = quiz_agent.verify_question(question, FAKE_PASSAGES)
+    assert result.valide is False
+    assert "grounding" in result.raison.lower() or "introuvable" in result.raison.lower()
+
+
+def test_verify_question_rejects_prompt_marker():
+    """Les portes programmatiques rejettent une question avec marqueur de prompt."""
+    question = Question(
+        type="ouverte",
+        question="Selon [PASSAGE 1], qu'est-ce que c'est?",
+        reference_answer="Une réponse",
+        source_excerpt="Un extrait",
+    )
+    result = quiz_agent.verify_question(question, FAKE_PASSAGES)
+    assert result.valide is False
+    assert "prompt" in result.raison.lower()
+
+
+def test_verify_question_rejects_invalid_mcq_structure():
+    """Les portes programmatiques rejettent une question QCM avec structure invalide."""
+    question = Question(
+        type="qcm",
+        question="Question?",
+        choices=["A"],  # Seul choix
+        correct_choice_index=0,
+        reference_answer="A",
+    )
+    result = quiz_agent.verify_question(question, FAKE_PASSAGES)
+    assert result.valide is False
+    assert "choix" in result.raison.lower()
+
+
+def test_verify_question_accepts_valid_grounded_question():
+    """Une question bien fondée passe les portes programmatiques et atteint le vérificateur."""
+    question = Question(
+        type="ouverte",
+        question="Comment éviter le surapprentissage?",
+        reference_answer="La régularisation L2 aide à le limiter",
+        source_excerpt="La régularisation L2 aide à le limiter",
+    )
+    result = quiz_agent.verify_question(question, FAKE_PASSAGES)
+    # En mode mock, le vérificateur LLM acceptera car la réponse apparaît dans les passages
+    assert result.valide is True
