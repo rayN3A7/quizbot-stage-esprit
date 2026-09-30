@@ -12,6 +12,46 @@ from typing import List
 from .config import settings
 
 
+def normalize_typography(text: str) -> str:
+    """Remplace les caractères typographiques Unicode par leurs équivalents ASCII.
+
+    Les PDFs de cours utilisent des caractères spécialisés pour l'esthétique,
+    ce qui casse la validation du code : "2*n−1" avec un tiret moins (U+2212)
+    n'est pas du Python valide. Cette fonction unifie la représentation.
+
+    Substitutions :
+    - U+2212 (−) → "-" (tiret moins mathématique)
+    - U+2013 (–) → "-" (tiret demi-cadratin)
+    - U+2014 (—) → "-" (tiret cadratin)
+    - U+2018/2019 ('') → "'" (guillemets simples typographiques)
+    - U+201C/201D ("") → '"' (guillemets doubles typographiques)
+    - U+00A0 → " " (espace insécable)
+    - U+2009 → " " (espace fine)
+    - U+2217 (∗) → "*" (astérisque opérateur)
+    - U+2026 (…) → "..." (points de suspension)
+    """
+    # Tirets et tirets moins
+    text = text.replace('\u2212', '-')  # U+2212: tiret moins mathématique
+    text = text.replace('\u2013', '-')  # U+2013: tiret demi-cadratin (en dash)
+    text = text.replace('\u2014', '-')  # U+2014: tiret cadratin (em dash)
+
+    # Guillemets typographiques
+    text = text.replace('\u2018', "'")  # U+2018: guillemet simple gauche
+    text = text.replace('\u2019', "'")  # U+2019: guillemet simple droit
+    text = text.replace('\u201C', '"')  # U+201C: guillemet double gauche
+    text = text.replace('\u201D', '"')  # U+201D: guillemet double droit
+
+    # Espaces spécialisées
+    text = text.replace('\u00A0', ' ')  # U+00A0: espace insécable
+    text = text.replace('\u2009', ' ')  # U+2009: espace fine
+
+    # Astérisque opérateur et points de suspension
+    text = text.replace('\u2217', '*')  # U+2217: astérisque opérateur
+    text = text.replace('\u2026', '...')  # U+2026: points de suspension
+
+    return text
+
+
 class UnsupportedFileTypeError(ValueError):
     pass
 
@@ -86,6 +126,10 @@ def extract_text(path: Path) -> List[tuple[int, str]]:
             "Aucun texte exploitable n'a été trouvé dans ce document. "
             "Le fichier est peut-être un scan sans OCR ou ne contient que des images."
         )
+
+    # Normaliser la typographie (caractères Unicode → ASCII) avant nettoyage.
+    # Cela corrige les représentations invalides de code (ex: "2*n−1" avec tiret moins).
+    pages = [(page_num, normalize_typography(text)) for page_num, text in pages]
 
     pages = strip_repeated_boilerplate(pages)
     return pages

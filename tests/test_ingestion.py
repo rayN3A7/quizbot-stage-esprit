@@ -3,7 +3,7 @@ from pathlib import Path
 
 from backend.ingestion import (
     _merge_wrapped_lines, chunk_pages, extract_text, extract_text_from_pdf,
-    process_document, strip_repeated_boilerplate,
+    normalize_typography, process_document, strip_repeated_boilerplate,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -139,3 +139,57 @@ def test_real_course_pdf_has_no_leaked_institutional_boilerplate():
         assert "ESPRIT" not in c.text
         assert "©" not in c.text
         assert "2022-2023" not in c.text
+
+
+# --------------------------------------------------------------------------- #
+# Normalisation typographique — conversion Unicode → ASCII
+# --------------------------------------------------------------------------- #
+
+def test_normalize_typography_converts_unicode_minus_to_hyphen():
+    """Le tiret moins mathématique (U+2212) doit être converti en tiret ASCII."""
+    # Exemple réel : PDFs contiennent "2*n−1" avec U+2212 au lieu de "-"
+    text = "La formule 2*n−1 est invalide en Python."
+    normalized = normalize_typography(text)
+    assert "2*n-1" in normalized
+    assert "2*n−1" not in normalized
+
+
+def test_normalize_typography_converts_all_dash_variants():
+    """Tous les tirets typographiques (en/em dash, moins) → ASCII hyphen."""
+    text = "Un–deux–trois — quatre — cinq−six"  # U+2013, U+2014, U+2212
+    normalized = normalize_typography(text)
+    assert normalized == "Un-deux-trois - quatre - cinq-six"
+
+
+def test_normalize_typography_converts_smart_quotes():
+    """Les guillemets typographiques doivent devenir des ASCII quotes."""
+    # U+201C = " (left double quote), U+201D = " (right double quote)
+    # U+2018 = ' (left single quote), U+2019 = ' (right single quote)
+    text = '\u201CBonjour\u201D et \u2018salut\u2019 en typographie courbe.'
+    normalized = normalize_typography(text)
+    assert '"Bonjour"' in normalized
+    assert "'salut'" in normalized
+    assert '\u201CBonjour\u201D' not in normalized
+    assert '\u2018salut\u2019' not in normalized
+
+
+def test_normalize_typography_converts_special_spaces():
+    """Les espaces insécables et fines doivent devenir des espaces normales."""
+    text = "Mot\u00A0insécable et mot\u2009fin."  # U+00A0 et U+2009
+    normalized = normalize_typography(text)
+    assert normalized == "Mot insécable et mot fin."
+
+
+def test_normalize_typography_converts_operator_characters():
+    """L'astérisque opérateur (U+2217) et ellipsis (U+2026) → ASCII."""
+    text = "2∗n et attends…"  # U+2217 et U+2026
+    normalized = normalize_typography(text)
+    assert "2*n" in normalized
+    assert "attends..." in normalized
+
+
+def test_normalize_typography_preserves_regular_ascii():
+    """Les caractères ASCII normaux ne doivent pas changer."""
+    text = "normal-text with 'quotes' and (parens) and ** operator."
+    normalized = normalize_typography(text)
+    assert normalized == text
