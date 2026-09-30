@@ -61,13 +61,11 @@ class Settings:
     # Hub au premier lancement puis mis en cache localement (~/.cache/huggingface) ;
     # ce n'est pas un appel d'API distant à chaque requête, contrairement à
     # OpenAI/Mistral/HuggingFace ci-dessus.
-    # Modèle par défaut : Qwen2.5-3B-Instruct (Apache 2.0, ~2 Go de VRAM en 4-bit),
-    # choisi pour tenir confortablement sur un GPU de laptop à VRAM limitée (6 Go)
-    # une fois la mémoire réservée par Windows/WDDM et le cache KV du contexte RAG
-    # pris en compte. Sur une carte avec plus de VRAM (>=10-12 Go), on peut repasser
-    # à un modèle plus grand comme mistralai/Mistral-7B-Instruct-v0.3 pour une
-    # meilleure qualité de génération.
-    LOCAL_LLM_MODEL: str = _env("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-3B-Instruct")
+    # Modèle par défaut : Qwen2.5-7B-Instruct (Apache 2.0, ~4-5 Go de VRAM en 4-bit
+    # avec bitsandbytes). Modèle de secours : Qwen2.5-3B-Instruct (~2 Go), utilisé
+    # automatiquement si le chargement du 7B échoue pour cause d'OOM.
+    LOCAL_LLM_MODEL: str = _env("LOCAL_LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+    LOCAL_LLM_FALLBACK_MODEL: str = _env("LOCAL_LLM_FALLBACK_MODEL", "Qwen/Qwen2.5-3B-Instruct")
     LOCAL_LLM_MAX_NEW_TOKENS: int = int(_env("LOCAL_LLM_MAX_NEW_TOKENS", "3600"))
     # Budget de tokens réservé à CHAQUE question demandée. Le plafond effectif
     # d'un appel vaut max(LOCAL_LLM_MAX_NEW_TOKENS, num_questions * ce budget) :
