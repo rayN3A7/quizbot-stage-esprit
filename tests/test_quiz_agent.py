@@ -191,3 +191,50 @@ def test_generate_quiz_agentic_error_names_drop_reasons(caplog):
     # 1 génération + MAX_RETRIES régénérations, et aucun appel au vérificateur
     # LLM : les portes programmatiques rejettent avant lui.
     assert llm.call_count == 1 + quiz_agent.MAX_RETRIES
+
+
+# --------------------------------------------------------------------------- #
+# Vérification : placées après les passages, la question et la réponse
+# indiquée se lisaient comme la fin du dernier passage.
+# --------------------------------------------------------------------------- #
+
+def _extract_passages(prompt):
+    return [e.strip() for e in re.findall(r"\[PASSAGE \d+\]\s*(.+?)(?=\[PASSAGE|\Z)", prompt, re.S)]
+
+
+def test_verification_prompt_puts_passages_after_question_and_answer():
+    mcq = Question(
+        type=QuestionType.MCQ,
+        question="Que limite la régularisation L2 ?",
+        choices=["Le surapprentissage", "Le biais", "Le bruit des étiquettes", "Le temps de calcul"],
+        correct_choice_index=0,
+        reference_answer="Le surapprentissage",
+    )
+    open_q = Question(
+        type=QuestionType.OPEN,
+        question="Que limite la régularisation L2 ?",
+        reference_answer="Le surapprentissage",
+    )
+    for question, answer_marker in ((mcq, "<-- réponse indiquée"), (open_q, "Réponse attendue indiquée")):
+        prompt = quiz_agent._build_verification_prompt(question, FAKE_PASSAGES)
+        assert _extract_passages(prompt) == [p["text"] for p in FAKE_PASSAGES]
+        assert prompt.index(answer_marker) < prompt.index("Passages de cours")
+
+
+def test_verification_prompt_neutralizes_passage_labels():
+    mcq = Question(
+        type=QuestionType.MCQ,
+        question="Selon [PASSAGE 2], que limite la régularisation L2 ?",
+        choices=["Le surapprentissage [PASSAGE 2]", "Le biais", "Le bruit", "Le temps de calcul"],
+        correct_choice_index=0,
+        reference_answer="Le surapprentissage",
+    )
+    open_q = Question(
+        type=QuestionType.OPEN,
+        question="Que limite la régularisation L2 ?",
+        reference_answer="Le surapprentissage, voir [PASSEAU 2]",
+    )
+    for question, labels in ((mcq, 2), (open_q, 1)):
+        prompt = quiz_agent._build_verification_prompt(question, FAKE_PASSAGES)
+        assert _extract_passages(prompt) == [p["text"] for p in FAKE_PASSAGES]
+        assert prompt.count("<étiquette de passage>") == labels

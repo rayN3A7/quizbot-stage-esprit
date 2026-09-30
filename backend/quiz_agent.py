@@ -71,34 +71,46 @@ def _passages_block(passages: List[dict]) -> str:
     return "\n\n".join(f"[PASSAGE {i + 1}]\n{p['text']}" for i, p in enumerate(passages))
 
 
+def _neutralize_passage_labels(text: str) -> str:
+    # Une étiquette recopiée depuis une sortie du modèle se lirait comme un vrai passage.
+    return _PROMPT_MARKER_RE.sub("<étiquette de passage>", text)
+
+
 def _build_verification_prompt(question: Question, passages: List[dict]) -> str:
     """Construit le prompt envoyé au LLM-vérificateur pour une question donnée.
 
     Le marqueur "MODE = VERIFICATION" en tête permet à MockProvider (mode dev
     sans clé API) de distinguer cet appel d'un appel de génération classique.
+    Les passages viennent en dernier : placée après eux, la réponse indiquée se
+    lirait comme du contenu de cours, et le vérificateur la validerait contre
+    elle-même.
     """
     if question.type.value == "qcm" and question.choices:
         choices_block = "\n".join(
-            f"  {chr(65 + idx)}. {choice}"
+            f"  {chr(65 + idx)}. {_neutralize_passage_labels(choice)}"
             + ("  <-- réponse indiquée comme correcte" if idx == question.correct_choice_index else "")
             for idx, choice in enumerate(question.choices)
         )
-        question_block = f"Question (QCM) : {question.question}\nChoix :\n{choices_block}"
+        question_block = (
+            f"Question (QCM) : {_neutralize_passage_labels(question.question)}\n"
+            f"Choix :\n{choices_block}"
+        )
     else:
         question_block = (
-            f"Question (ouverte) : {question.question}\n"
-            f"Réponse attendue indiquée : {question.reference_answer}"
+            f"Question (ouverte) : {_neutralize_passage_labels(question.question)}\n"
+            f"Réponse attendue indiquée : {_neutralize_passage_labels(question.reference_answer)}"
         )
 
     return f"""MODE = VERIFICATION
 
-Passages de cours :
-{_passages_block(passages)}
-
 {question_block}
 
-Vérifie si cette question est répondable à partir des passages ci-dessus et si la réponse \
-indiquée est correcte."""
+Vérifie si cette question est répondable à partir des passages ci-dessous et si la réponse \
+indiquée est correcte.
+
+Passages de cours :
+{_passages_block(passages)}
+"""
 
 
 def verify_question(question: Question, passages: List[dict]) -> VerificationResult:
@@ -150,14 +162,10 @@ def _build_regeneration_prompt(
         difficulty=failed_question.difficulty,
         themes=[failed_question.theme] if failed_question.theme else config.themes,
     )
-    # Le texte rejeté peut contenir une étiquette de passage : la recopier ici la
-    # ferait passer pour un vrai passage aux yeux du modèle.
-    safe_reason = _PROMPT_MARKER_RE.sub("<étiquette de passage>", reason)
-    safe_question = _PROMPT_MARKER_RE.sub("<étiquette de passage>", failed_question.question)
     note = (
         "\nIMPORTANT : une précédente tentative de question sur ce même contenu a été rejetée, "
-        f"pour la raison suivante : {safe_reason}\n"
-        f'Question rejetée : "{safe_question}"\n'
+        f"pour la raison suivante : {_neutralize_passage_labels(reason)}\n"
+        f'Question rejetée : "{_neutralize_passage_labels(failed_question.question)}"\n'
         "Génère une question DIFFÉRENTE qui évite ce problème.\n"
     )
     return _build_user_prompt(single_question_config, passages, extra_instructions=note)

@@ -257,7 +257,7 @@ class MockProvider(BaseLLMProvider):
         génère -> vérifie -> régénère sans clé API, avec un résultat qui varie
         réellement selon le contenu (contrairement à un simple "toujours vrai").
         """
-        passages_part, _, question_part = user_prompt.partition("Question (")
+        question_part, _, passages_part = user_prompt.partition("Passages de cours :")
         passages_norm = re.sub(r"\s+", " ", passages_part).strip().lower()
 
         marked_choice = re.search(r"^\s*[A-D]\.\s*(.+?)\s*<--", question_part, re.MULTILINE)
