@@ -321,8 +321,9 @@ def test_filter_questions_by_quality_separates_kept_rejected():
 
 
 # --------------------------------------------------------------------------- #
-# Régression : avec Qwen2.5-7B, les 10 questions d'un quiz étaient rejetées. Le
-# modèle écrivait l'étiquette "[PASSAGE 1]" dans source_excerpt, car le prompt
+# Régression : avec Qwen2.5-3B (le 7B ne tient pas en VRAM et bascule sur le 3B),
+# les 10 questions d'un quiz étaient rejetées. Le modèle écrivait l'étiquette
+# "[PASSAGE 1]" dans source_excerpt, car le prompt
 # demandait d'« indiquer le passage source » (quiz 29657adce8, 9afc4625be...).
 # --------------------------------------------------------------------------- #
 
