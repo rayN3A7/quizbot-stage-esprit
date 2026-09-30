@@ -24,6 +24,7 @@ souhaitable (coût, latence) par rapport au pipeline rapide existant.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import List, Optional
 
@@ -32,6 +33,7 @@ from pydantic import BaseModel
 from .llm_client import LLMError, generate_completion
 from .models import Question, Quiz, QuizConfig
 from .quiz_generator import (
+    _PROMPT_MARKER_RE,
     SYSTEM_PROMPT,
     _build_user_prompt,
     _extract_json_object,
@@ -39,6 +41,8 @@ from .quiz_generator import (
     _quality_reject_reason,
     _retrieve_passages,
 )
+
+logger = logging.getLogger(__name__)
 
 # Nombre maximal de régénérations tentées par question rejetée avant de
 # l'écarter définitivement du quiz.
@@ -146,13 +150,17 @@ def _build_regeneration_prompt(
         difficulty=failed_question.difficulty,
         themes=[failed_question.theme] if failed_question.theme else config.themes,
     )
-    base_prompt = _build_user_prompt(single_question_config, passages)
-    return f"""{base_prompt}
-
-IMPORTANT : une précédente tentative de question sur ce même contenu a été rejetée par le \
-vérificateur pédagogique, pour la raison suivante : "{reason}"
-Question rejetée : "{failed_question.question}"
-Génère une question DIFFÉRENTE qui évite ce problème."""
+    # Le texte rejeté peut contenir une étiquette de passage : la recopier ici la
+    # ferait passer pour un vrai passage aux yeux du modèle.
+    safe_reason = _PROMPT_MARKER_RE.sub("<étiquette de passage>", reason)
+    safe_question = _PROMPT_MARKER_RE.sub("<étiquette de passage>", failed_question.question)
+    note = (
+        "\nIMPORTANT : une précédente tentative de question sur ce même contenu a été rejetée, "
+        f"pour la raison suivante : {safe_reason}\n"
+        f'Question rejetée : "{safe_question}"\n'
+        "Génère une question DIFFÉRENTE qui évite ce problème.\n"
+    )
+    return _build_user_prompt(single_question_config, passages, extra_instructions=note)
 
 
 def _regenerate_question(
@@ -191,9 +199,12 @@ def generate_quiz_agentic(document_id: str, document_name: str, config: QuizConf
         "verified_ok_first_try": 0,
     }
 
+    drop_reasons: List[str] = []
+
     for question in candidate_questions:
         current = question
         accepted = False
+        last_reason = ""
         for attempt in range(MAX_RETRIES + 1):
             result = verify_question(current, passages)
             if result.valide:
@@ -201,6 +212,7 @@ def generate_quiz_agentic(document_id: str, document_name: str, config: QuizConf
                     report["verified_ok_first_try"] += 1
                 accepted = True
                 break
+            last_reason = result.raison
             if attempt < MAX_RETRIES:
                 replacement = _regenerate_question(config, passages, current, result.raison)
                 if replacement is None:
@@ -211,12 +223,14 @@ def generate_quiz_agentic(document_id: str, document_name: str, config: QuizConf
             final_questions.append(current)
         else:
             report["dropped"] += 1
+            drop_reasons.append(last_reason)
+            logger.warning("Question écartée par l'agent : %s", last_reason)
 
     if not final_questions:
+        examples = list(dict.fromkeys(drop_reasons))[:3]
         raise LLMError(
-            "Toutes les questions générées ont été rejetées par le vérificateur pédagogique, "
-            "même après régénération. Réessayez, éventuellement avec un document ou des thèmes "
-            "différents."
+            f"Toutes les questions générées ({len(candidate_questions)}) ont été écartées par "
+            f"l'agent de vérification, même après régénération. Exemples : {' | '.join(examples)}"
         )
 
     # Comme dans quiz_generator.generate_quiz() : on tronque au nombre demandé

@@ -14,9 +14,14 @@ import os
 
 os.environ.setdefault("LLM_PROVIDER", "mock")
 
+import json
+import logging
+import re
+
 import pytest
 from unittest.mock import patch
 
+from backend.llm_client import LLMError
 from backend.models import Question, QuestionType, QuizConfig
 from backend import quiz_agent
 
@@ -144,3 +149,45 @@ def test_verify_question_accepts_valid_grounded_question():
     result = quiz_agent.verify_question(question, FAKE_PASSAGES)
     # En mode mock, le vérificateur LLM acceptera car la réponse apparaît dans les passages
     assert result.valide is True
+
+
+# --------------------------------------------------------------------------- #
+# Régénération : la note de rejet ne doit jamais suivre les passages, ni y
+# réinjecter une étiquette "[PASSAGE N]" citée depuis la sortie rejetée.
+# --------------------------------------------------------------------------- #
+
+def test_regeneration_prompt_keeps_passages_last_and_neutralizes_labels():
+    failed = Question(
+        type="ouverte",
+        question="Selon [PASSAGE 2], que limite la régularisation L2 ?",
+        reference_answer="Le surapprentissage",
+        source_excerpt="[PASSAGE 2]",
+    )
+    reason = quiz_agent._quality_reject_reason(failed, FAKE_PASSAGES)
+    config = QuizConfig(document_id="fake_doc", num_questions=3)
+    prompt = quiz_agent._build_regeneration_prompt(config, FAKE_PASSAGES, failed, reason)
+
+    extracted = re.findall(r"\[PASSAGE \d+\]\s*(.+?)(?=\[PASSAGE|\Z)", prompt, re.S)
+    assert [e.strip() for e in extracted] == [p["text"] for p in FAKE_PASSAGES]
+    assert prompt.index("IMPORTANT") < prompt.index("Passages de cours")
+    assert "Selon <étiquette de passage>, que limite" in prompt
+
+
+def test_generate_quiz_agentic_error_names_drop_reasons(caplog):
+    raw = json.dumps({"questions": [{
+        "type": "ouverte", "question": "Que limite la régularisation L2 ?",
+        "reference_answer": "Le surapprentissage", "source_excerpt": "[PASSAGE 2]",
+    }]})
+    config = QuizConfig(document_id="fake_doc", num_questions=1, use_verification_agent=True)
+    with patch.object(quiz_agent, "_retrieve_passages", return_value=FAKE_PASSAGES), \
+         patch.object(quiz_agent, "generate_completion", return_value=raw) as llm, \
+         caplog.at_level(logging.WARNING, logger="backend.quiz_agent"):
+        with pytest.raises(LLMError) as exc:
+            quiz_agent.generate_quiz_agentic("fake_doc", "cours_ml.pdf", config)
+
+    assert "Toutes les questions générées (1) ont été écartées" in str(exc.value)
+    assert 'source_excerpt : "[PASSAGE 2]"' in str(exc.value)
+    assert "Question écartée par l'agent" in caplog.text
+    # 1 génération + MAX_RETRIES régénérations, et aucun appel au vérificateur
+    # LLM : les portes programmatiques rejettent avant lui.
+    assert llm.call_count == 1 + quiz_agent.MAX_RETRIES

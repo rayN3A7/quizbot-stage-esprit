@@ -1,7 +1,13 @@
 """Tests du pipeline de génération de quiz (prompt building, parsing, mock LLM)."""
+import json
+import logging
+import re
+from unittest.mock import patch
+
 import pytest
 
-from backend.llm_client import MockProvider
+from backend import quiz_generator
+from backend.llm_client import LLMError, MockProvider
 from backend.models import Difficulty, Question, QuestionType, QuizConfig
 from backend.quiz_generator import (
     SYSTEM_PROMPT, _build_user_prompt, _parse_llm_response, _quality_reject_reason,
@@ -312,3 +318,68 @@ def test_filter_questions_by_quality_separates_kept_rejected():
     assert kept[0] == good_q
     assert len(reasons) == 1
     assert 1 in reasons  # bad_q était à index 1
+
+
+# --------------------------------------------------------------------------- #
+# Régression : avec Qwen2.5-7B, les 10 questions d'un quiz étaient rejetées. Le
+# modèle écrivait l'étiquette "[PASSAGE 1]" dans source_excerpt, car le prompt
+# demandait d'« indiquer le passage source » (quiz 29657adce8, 9afc4625be...).
+# --------------------------------------------------------------------------- #
+
+# Même expression que MockProvider pour découper les passages d'un prompt.
+_MOCK_PASSAGE_RE = r"\[PASSAGE \d+\]\s*(.+?)(?=\[PASSAGE|\Z)"
+
+
+def test_prompts_require_verbatim_excerpt_instead_of_passage_label():
+    config = QuizConfig(document_id="d1", num_questions=3, question_type="qcm")
+    prompt = _build_user_prompt(config, PASSAGES)
+    assert "indiquer le passage source" not in prompt
+    assert "source_excerpt" in prompt and "mot pour mot" in prompt
+
+    # La règle « ne recopie jamais » contredisait la porte de grounding (qui
+    # exige 6 mots recopiés) tant qu'elle n'exemptait pas source_excerpt.
+    exception = [l for l in SYSTEM_PROMPT.splitlines() if "Seule exception" in l]
+    assert exception and "source_excerpt" in exception[0] and "MOT POUR MOT" in exception[0]
+
+
+def test_passages_are_the_last_block_of_the_prompt():
+    config = QuizConfig(document_id="d1", num_questions=2, question_type="qcm")
+    prompt = _build_user_prompt(config, PASSAGES, extra_instructions="NOTE SUPPLEMENTAIRE\n")
+    extracted = re.findall(_MOCK_PASSAGE_RE, prompt, re.S)
+    assert [e.strip() for e in extracted] == [p["text"] for p in PASSAGES]
+    assert prompt.index("NOTE SUPPLEMENTAIRE") < prompt.index("[PASSAGE 1]")
+
+
+def test_quality_gate_reason_names_field_and_quotes_passage_label():
+    q = Question(
+        type=QuestionType.OPEN,
+        question="Pourquoi la régularisation limite-t-elle le surapprentissage ?",
+        reference_answer="Elle pénalise les poids élevés.",
+        source_excerpt="[PASSEAU 2]",
+    )
+    assert _quality_reject_reason(q, TEST_PASSAGES) == (
+        'Marqueur de prompt dans source_excerpt : "[PASSEAU 2]"'
+    )
+
+
+def test_generate_quiz_all_rejected_error_names_reasons_and_logs_raw_output(caplog):
+    raw = json.dumps({"questions": [
+        {"type": "ouverte", "question": f"Question {i} ?", "reference_answer": "r",
+         "source_excerpt": label}
+        for i, label in enumerate(["[PASSAGE 1]", "[PASSAGE 1]", "[PASSEAU 2]"])
+    ]})
+    config = QuizConfig(document_id="d1", num_questions=3)
+    with patch.object(quiz_generator, "_retrieve_passages", return_value=TEST_PASSAGES), \
+         patch.object(quiz_generator, "generate_completion", return_value=raw), \
+         caplog.at_level(logging.WARNING, logger="backend.quiz_generator"):
+        with pytest.raises(LLMError) as exc:
+            quiz_generator.generate_quiz("d1", "cours.pdf", config)
+
+    message = str(exc.value)
+    assert "Toutes les questions générées (3) ont été rejetées" in message
+    assert 'source_excerpt : "[PASSAGE 1]"' in message
+    assert 'source_excerpt : "[PASSEAU 2]"' in message
+    assert message.count("[PASSAGE 1]") == 1  # raisons identiques dédupliquées
+    for i in (1, 2, 3):
+        assert f"Question {i}/3 rejetée" in caplog.text
+    assert raw[:200] in caplog.text

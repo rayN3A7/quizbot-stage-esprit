@@ -7,6 +7,7 @@ valide la réponse pour produire un objet Quiz.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import List
 
@@ -14,6 +15,8 @@ from .embeddings import cosine_similarity
 from .llm_client import generate_completion, LLMError
 from .models import Question, Quiz, QuizConfig, QuestionType, Difficulty
 from .vectorstore import get_vector_store
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """Tu es un assistant pédagogique expert, chargé de générer des questionnaires \
 d'auto-évaluation pour des étudiants en cycle ingénieur, strictement à partir des passages de \
@@ -27,6 +30,9 @@ n'a pas le passage sous les yeux.
 - Ne recopie JAMAIS une phrase du passage mot pour mot, ni dans l'énoncé de la question, ni dans \
 les choix, ni dans la réponse attendue : reformule toujours avec tes propres mots, comme le \
 ferait un enseignant qui a compris le cours (et non un outil d'extraction de texte).
+- Seule exception à la règle précédente : le champ "source_excerpt", qui sert de preuve. Il \
+doit contenir une phrase recopiée MOT POUR MOT depuis un passage (au moins 6 mots consécutifs), \
+jamais une reformulation, et jamais l'étiquette du passage (pas de "PASSAGE" suivi d'un numéro).
 - Pour les QCM, les 3 distracteurs doivent être des confusions plausibles et conceptuellement \
 proches du sujet (un autre concept de la même famille, une définition voisine mais incorrecte, \
 une erreur fréquente d'étudiant) — jamais des phrases sans rapport tirées d'un autre passage, et \
@@ -47,14 +53,18 @@ Réponds uniquement avec un objet JSON valide, sans texte additionnel, au format
       "correct_choice_index": 0,                                  // uniquement si type == "qcm", index 0-based
       "reference_answer": "réponse attendue complète",
       "explanation": "explication pédagogique de la réponse",
-      "source_excerpt": "extrait du passage utilisé"
+      "source_excerpt": "phrase recopiée mot pour mot depuis le passage utilisé"
     }
   ]
 }
 """
 
 
-def _build_user_prompt(config: QuizConfig, passages: List[dict]) -> str:
+def _build_user_prompt(
+    config: QuizConfig, passages: List[dict], extra_instructions: str = "",
+) -> str:
+    # Les passages doivent rester le DERNIER bloc du prompt : tout texte placé
+    # après serait lu comme faisant partie du dernier passage.
     passages_block = "\n\n".join(
         f"[PASSAGE {i+1}]\n{p['text']}" for i, p in enumerate(passages)
     )
@@ -75,7 +85,8 @@ Consignes :
 - Base-toi exclusivement sur le contenu des passages fournis.
 - Si TYPE_QUESTIONS == "mélange", alterne entre QCM et questions ouvertes.
 - Les QCM doivent avoir exactement 4 choix, un seul correct.
-- Chaque question doit indiquer le passage source (source_excerpt).
+- Pour chaque question, "source_excerpt" est une phrase du passage recopiée mot pour mot \
+(la preuve que la question vient du cours), jamais l'étiquette du passage.
 - Varie les sous-thèmes si plusieurs passages différents sont fournis.
 
 --- EXEMPLES DE CALIBRAGE (ne recopie PAS leur contenu, seulement leur esprit) ---
@@ -96,17 +107,20 @@ BONNE question (teste la compréhension, distracteurs plausibles) :
 {{"question": "Pourquoi la normalisation min-max est-elle déconseillée sur un jeu de données contenant des valeurs extrêmes ?",
   "choices": ["Parce qu'une valeur aberrante étire l'étendue et comprime toutes les autres valeurs près de 0", "Parce qu'elle ne fonctionne que sur des variables catégorielles", "Parce qu'elle exige une distribution normale des données", "Parce qu'elle supprime automatiquement les valeurs extrêmes"],
   "correct_choice_index": 0,
-  "reference_answer": "L'étendue étant calculée à partir du minimum et du maximum, une valeur aberrante l'élargit fortement et tasse les valeurs normales dans une plage étroite."}}
+  "reference_answer": "L'étendue étant calculée à partir du minimum et du maximum, une valeur aberrante l'élargit fortement et tasse les valeurs normales dans une plage étroite.",
+  "source_excerpt": "Elle est sensible aux valeurs aberrantes."}}
 Pourquoi elle est bonne : l'énoncé est reformulé, il demande un raisonnement
 (la conséquence d'une propriété), et les trois distracteurs sont des confusions
-crédibles d'étudiant sur ce même concept.
+crédibles d'étudiant sur ce même concept. Le source_excerpt, lui, est recopié
+exactement depuis le passage : c'est la preuve, pas une reformulation.
 
 --- FIN DES EXEMPLES ---
 
 Rappel final : LANGUE = {language}. Rédige TOUTES les questions, tous les choix,
 toutes les réponses et toutes les explications dans cette langue, quelle que
-soit la langue des exemples ci-dessus.
-
+soit la langue des exemples ci-dessus. Seul source_excerpt reste dans la langue
+du passage, recopié tel quel.
+{extra_instructions}
 Passages de cours :
 {passages_block}
 """
@@ -355,6 +369,18 @@ def _is_code_like(text: str) -> bool:
     return any(token in text for token in code_tokens)
 
 
+# Tolère les fautes de frappe observées sur le modèle local : [PASSEAGE 1], [PASSEAU 2].
+_PROMPT_MARKER_RE = re.compile(
+    r"\[PASSAGES?\s*\d+\]|\[PASSEAU.*?\]|\[PASSEAGE.*?\]|NUM_QUESTIONS|TYPE_QUESTIONS",
+    re.IGNORECASE,
+)
+
+
+def _quote(text: str, limit: int = 60) -> str:
+    text = " ".join(text.split())
+    return f'"{text[:limit]}…"' if len(text) > limit else f'"{text}"'
+
+
 def _quality_reject_reason(question: Question, passages: List[dict]) -> str | None:
     """Vérifie une question et retourne la raison du rejet, ou None si valide.
 
@@ -372,20 +398,14 @@ def _quality_reject_reason(question: Question, passages: List[dict]) -> str | No
             return "Choix vide détecté"
 
     # --- b) PROMPT ARTIFACTS ---
-    # Détecte les marqueurs de prompt (avec tolérance pour les fautes de frappe du modèle)
-    prompt_markers = re.compile(
-        r'\[PASSAGE[S]?\s*\d+\]'  # [PASSAGE 1], [PASSAGES 2], et variantes
-        r'|\[PASSEAU.*?\]'         # typo observée: [PASSEAU 2]
-        r'|\[PASSEAGE.*?\]'        # typo observée: [PASSEAGE 1]
-        r'|NUM_QUESTIONS'
-        r'|TYPE_QUESTIONS',
-        re.IGNORECASE
-    )
-    if prompt_markers.search(question.question) or \
-       prompt_markers.search(question.reference_answer) or \
-       prompt_markers.search(question.source_excerpt or "") or \
-       (question.choices and any(prompt_markers.search(c) for c in question.choices)):
-        return "Question contient des marqueurs de prompt"
+    fields = [
+        ("question", question.question),
+        ("reference_answer", question.reference_answer),
+        ("source_excerpt", question.source_excerpt or ""),
+    ] + [(f"choices[{i}]", c) for i, c in enumerate(question.choices or [])]
+    for name, value in fields:
+        if _PROMPT_MARKER_RE.search(value):
+            return f"Marqueur de prompt dans {name} : {_quote(value)}"
 
     # --- a) GROUNDING (source_excerpt doit être dans les passages) ---
     if question.source_excerpt and len(question.source_excerpt.split()) >= 4:
@@ -404,7 +424,10 @@ def _quality_reject_reason(question: Question, passages: List[dict]) -> str | No
                 found = True
                 break
         if not found and window_size >= 1:
-            return "Source introuvable dans les passages (grounding failure)"
+            return (
+                "source_excerpt introuvable dans les passages (grounding failure) : "
+                f"{_quote(question.source_excerpt)}"
+            )
 
     # --- c) DEGENERATE CHOICES (pour MCQ) ---
     if question.type == QuestionType.MCQ and question.choices:
@@ -540,15 +563,17 @@ def generate_quiz(document_id: str, document_name: str, config: QuizConfig) -> Q
     raw_response = generate_completion(SYSTEM_PROMPT, user_prompt)
     questions = _parse_llm_response(raw_response)
 
-    # Applique les portes de qualité programmatiques
     kept_questions, rejection_reasons = filter_questions_by_quality(questions, passages)
+    for idx, reason in rejection_reasons.items():
+        logger.warning("Question %d/%d rejetée : %s", idx + 1, len(questions), reason)
 
     if not kept_questions:
-        # Aucune question n'a survécu aux portes de qualité
-        reasons_summary = "; ".join(set(rejection_reasons.values()))
+        logger.warning("Aucune question retenue. Début de la réponse brute du modèle : %s",
+                       raw_response[:500])
+        examples = list(dict.fromkeys(rejection_reasons.values()))[:3]
         raise LLMError(
-            f"Toutes les questions ont échoué les portes de qualité. "
-            f"Raisons : {reasons_summary}. Réessayez avec un autre document ou d'autres thèmes."
+            f"Toutes les questions générées ({len(questions)}) ont été rejetées par les portes "
+            f"de qualité. Exemples : {' | '.join(examples)}"
         )
 
     # On tronque/complète pour respecter au mieux le nombre de questions demandé.
