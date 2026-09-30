@@ -29,6 +29,9 @@ class FakeVectorStore:
         chunks = self.data.get(document_id, [])
         return [{"text": c.text, "metadata": {}, "distance": 0.1} for c in chunks[:top_k]]
 
+    def all_texts(self, document_id, limit=400):
+        return [c.text for c in self.data.get(document_id, [])[:limit]]
+
 
 def _fake_embed_text(text: str):
     vec = np.zeros(64)

@@ -11,9 +11,10 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 def test_extract_text_from_pdf(sample_pdf):
     pages = extract_text_from_pdf(sample_pdf)
-    assert len(pages) == 2
+    assert len(pages) == 3
     assert "reseaux de neurones" in pages[0][1]
     assert "retropropagation" in pages[1][1]
+    assert "regularisation L2" in pages[2][1]
 
 
 def test_chunk_pages_respects_size_and_overlap():

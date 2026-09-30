@@ -12,6 +12,9 @@ from pathlib import Path
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix="quizbot_test_data_")
 os.environ["QUIZBOT_DATA_DIR"] = _TEST_DATA_DIR
 os.environ["DATABASE_URL"] = f"sqlite:///{Path(_TEST_DATA_DIR) / 'test_quizbot.db'}"
+# Forcé (pas setdefault) : load_dotenv ne surcharge pas une variable déjà
+# définie, sinon LLM_PROVIDER=local du .env charge un modèle 7B pendant les tests.
+os.environ["LLM_PROVIDER"] = "mock"
 
 import pytest
 
