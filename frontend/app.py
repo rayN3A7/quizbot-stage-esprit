@@ -374,7 +374,8 @@ hr { border-color:var(--qb-line); }
   border-radius:12px !important; color:var(--qb-text) !important; }
 
 @media (prefers-reduced-motion: reduce) {
-  *, .stApp::before { transition:none !important; animation:none !important; }
+  /* `*` seul ne cible pas les pseudo-éléments (fond animé, reflet des boutons). */
+  *, *::before, *::after { transition:none !important; animation:none !important; }
   .stButton > button:hover, .qb-q:hover, .qb-row:hover, .qb-res:hover { transform:none; }
 }
 @media (max-width: 640px) {

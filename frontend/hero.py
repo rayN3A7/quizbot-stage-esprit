@@ -203,7 +203,8 @@ HERO_HTML = r"""
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   resize();
-  window.addEventListener('resize', resize);
+  // Mouvement réduit : une seule image fixe, redessinée seulement au redimensionnement.
+  window.addEventListener('resize', function () { resize(); if (calm) frame(); });
 
   // --- nuage de points : coordonnees 3D reelles dans un volume centre ------
   var N = 118, FOCAL = 620, pts = [];
@@ -233,12 +234,14 @@ HERO_HTML = r"""
 
   var tiltX = 0, tiltY = 0, curX = 0, curY = 0, spin = 0, t = 0;
 
-  stage.addEventListener('pointermove', function (e) {
-    var r = stage.getBoundingClientRect();
-    tiltY = ((e.clientX - r.left) / r.width - 0.5);
-    tiltX = ((e.clientY - r.top) / r.height - 0.5);
-  });
-  stage.addEventListener('pointerleave', function () { tiltX = 0; tiltY = 0; });
+  if (!calm) {
+    stage.addEventListener('pointermove', function (e) {
+      var r = stage.getBoundingClientRect();
+      tiltY = ((e.clientX - r.left) / r.width - 0.5);
+      tiltX = ((e.clientY - r.top) / r.height - 0.5);
+    });
+    stage.addEventListener('pointerleave', function () { tiltX = 0; tiltY = 0; });
+  }
 
   function frame() {
     t += 0.016;
@@ -282,7 +285,7 @@ HERO_HTML = r"""
 
     for (var k = 0; k < proj.length; k++) {
       var p = proj[k];
-      var pulse = p.hit ? 0.6 + 0.4 * Math.sin(t * 2 + p.ph) : 1;
+      var pulse = p.hit && !calm ? 0.6 + 0.4 * Math.sin(t * 2 + p.ph) : 1;
       var rad = Math.max(0.4, p.s * (p.hit ? 2.5 : 1.5));
       ctx.beginPath();
       ctx.arc(p.sx, p.sy, rad, 0, 6.2832);
@@ -298,7 +301,7 @@ HERO_HTML = r"""
       }
     }
 
-    requestAnimationFrame(frame);
+    if (!calm) requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 })();
