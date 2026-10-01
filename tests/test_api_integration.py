@@ -180,6 +180,40 @@ def test_full_teacher_and_student_flow(client, sample_pdf):
     assert r.status_code == 200
 
 
+def test_student_token_cannot_retrieve_answers(client, sample_pdf):
+    """Un étudiant authentifié qui appelle l'API directement ne doit lire aucune
+    réponse avant de soumettre ; le professeur garde tout (relecture, exports)."""
+    prof = _auth_headers(client, "prof_leak", "professeur")
+    stud = _auth_headers(client, "stud_leak", "etudiant")
+    with open(sample_pdf, "rb") as f:
+        doc = client.post("/documents/upload", headers=prof,
+                          files={"file": ("cours.pdf", f, "application/pdf")}).json()
+    quiz = client.post("/quizzes/generate", headers=prof, json={
+        "document_id": doc["id"], "num_questions": 4, "question_type": "mélange",
+    }).json()
+    assert client.post(f"/quizzes/{quiz['id']}/publish", headers=prof).status_code == 200
+    expected_answers = [q["correct_choice_index"] for q in quiz["questions"]]
+    assert any(i is not None for i in expected_answers)
+
+    hidden = {"correct_choice_index", "reference_answer", "explanation", "source_excerpt"}
+    as_student = [client.get(f"/quizzes/{quiz['id']}", headers=stud).json()]
+    as_student += [q for q in client.get("/quizzes", headers=stud).json() if q["id"] == quiz["id"]]
+    assert len(as_student) == 2
+    for payload in as_student:
+        assert [q["question"] for q in payload["questions"]] == [q["question"] for q in quiz["questions"]]
+        for q in payload["questions"]:
+            assert hidden.isdisjoint(q), f"exposé à l'étudiant : {sorted(hidden & q.keys())}"
+            if q["type"] == "qcm":
+                assert q["choices"]
+
+    as_professor = client.get(f"/quizzes/{quiz['id']}", headers=prof).json()
+    assert [q["correct_choice_index"] for q in as_professor["questions"]] == expected_answers
+    listed = next(q for q in client.get("/quizzes", headers=prof).json() if q["id"] == quiz["id"])
+    assert [q["correct_choice_index"] for q in listed["questions"]] == expected_answers
+    exported = client.get(f"/quizzes/{quiz['id']}/export/json", headers=prof).json()
+    assert [q["correct_choice_index"] for q in exported["questions"]] == expected_answers
+
+
 def test_generate_quiz_unknown_document_returns_404(client):
     prof_headers = _auth_headers(client, "prof_404", "professeur")
     r = client.post("/quizzes/generate", headers=prof_headers, json={"document_id": "unknown", "num_questions": 3})

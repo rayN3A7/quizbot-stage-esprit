@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Union
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -37,7 +38,7 @@ from .export import export_quiz_json, export_quiz_pdf
 from .grading import grade_quiz
 from .ingestion import EmptyDocumentError, UnsupportedFileTypeError, process_document
 from .models import (
-    DocumentInfo, Quiz, QuizConfig, QuizResult, Role, SubmissionRequest,
+    DocumentInfo, Quiz, QuizConfig, QuizResult, Role, StudentQuiz, SubmissionRequest,
     Token, UserCreate, UserInDB, UserPublic,
 )
 from .quiz_generator import generate_quiz
@@ -214,21 +215,28 @@ def generate_quiz_endpoint(config: QuizConfig, current_user: UserInDB = Depends(
     return quiz
 
 
-@app.get("/quizzes/{quiz_id}", response_model=Quiz)
+def _visible_quiz(quiz: Quiz, user: UserInDB) -> Quiz | StudentQuiz:
+    # Un étudiant a un JWT valide et peut appeler l'API directement : masquer
+    # les réponses dans l'interface ne les protège pas.
+    return quiz if user.role == Role.PROFESSOR else StudentQuiz.from_quiz(quiz)
+
+
+@app.get("/quizzes/{quiz_id}", response_model=Union[Quiz, StudentQuiz])
 def get_quiz_endpoint(quiz_id: str, current_user: UserInDB = Depends(any_role)):
     quiz = storage.get_quiz(quiz_id)
     if quiz is None:
         raise HTTPException(404, "Quiz introuvable.")
     if not quiz.published and current_user.role != Role.PROFESSOR:
         raise HTTPException(403, "Ce quiz n'est pas encore publié.")
-    return quiz
+    return _visible_quiz(quiz, current_user)
 
 
-@app.get("/quizzes", response_model=list[Quiz])
+@app.get("/quizzes", response_model=list[Union[Quiz, StudentQuiz]])
 def list_quizzes_endpoint(published_only: bool = False, current_user: UserInDB = Depends(any_role)):
     # Un étudiant ne doit jamais voir les quiz non publiés, quel que soit le paramètre.
     force_published_only = published_only or current_user.role == Role.STUDENT
-    return storage.list_quizzes(published_only=force_published_only)
+    quizzes = storage.list_quizzes(published_only=force_published_only)
+    return [_visible_quiz(q, current_user) for q in quizzes]
 
 
 @app.post("/quizzes/{quiz_id}/publish", response_model=Quiz)

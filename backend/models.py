@@ -85,6 +85,30 @@ class Quiz(BaseModel):
     agent_report: Optional[dict] = None
 
 
+class StudentQuestion(BaseModel):
+    """Question vue par un étudiant avant correction. Liste blanche : rien qui
+    révèle la réponse (l'extrait source contient souvent la bonne réponse)."""
+    id: str
+    type: QuestionType
+    theme: str = ""
+    difficulty: Difficulty = Difficulty.MEDIUM
+    question: str
+    choices: Optional[List[str]] = None
+
+
+class StudentQuiz(BaseModel):
+    id: str
+    title: str
+    document_name: str
+    created_at: datetime
+    published: bool
+    questions: List[StudentQuestion] = Field(default_factory=list)
+
+    @classmethod
+    def from_quiz(cls, quiz: Quiz) -> StudentQuiz:
+        return cls.model_validate(quiz.model_dump())
+
+
 class QuizConfig(BaseModel):
     """Paramètres choisis par l'enseignant pour générer un quiz."""
     document_id: str
