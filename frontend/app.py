@@ -615,6 +615,29 @@ def export_button(quiz: dict, kind: str, mime: str) -> None:
                        mime=mime, key=f"{kind}_{quiz['id']}")
 
 
+@st.cache_data(ttl=60, max_entries=128, show_spinner=False)
+def _fetch_json(path: str, token: str, params: tuple):
+    r = requests.get(f"{API_BASE_URL}{path}", headers={"Authorization": f"Bearer {token}"},
+                     params=dict(params))
+    if r.status_code == 401:
+        raise _SessionExpired
+    r.raise_for_status()
+    return r.json()
+
+
+def api_get_cached(path: str, **params):
+    """Lecture partagée entre les reruns (60 s, par utilisateur). Toute écriture
+    appelle invalidate_cache() pour que l'affichage suivant la reflète."""
+    try:
+        return _fetch_json(path, st.session_state.get("token", ""), tuple(sorted(params.items())))
+    except _SessionExpired:
+        _expire_session()
+
+
+def invalidate_cache() -> None:
+    _fetch_json.clear()
+
+
 # --------------------------------------------------------------------------- #
 # Vérification de la connexion au backend
 # --------------------------------------------------------------------------- #
@@ -734,13 +757,14 @@ def teacher_space():
                 try:
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue())}
                     doc = api_post("/documents/upload", files=files)
+                    invalidate_cache()
                     st.success(f"Document indexé — {doc['num_chunks']} segments créés.")
                     st.session_state["last_document_id"] = doc["id"]
                 except Exception as e:
                     st.error(f"L'indexation a échoué : {e}")
 
         st.write("")
-        docs = api_get("/documents")
+        docs = api_get_cached("/documents")
         section("Bibliothèque", "Documents indexés",
                 "" if docs else "Rien n'est encore indexé.")
         if docs:
@@ -758,7 +782,7 @@ def teacher_space():
 
     # --- 2. Génération ------------------------------------------------------
     with tab_generate:
-        docs = api_get("/documents")
+        docs = api_get_cached("/documents")
         if not docs:
             section("Étape 2", "Générer un quiz")
             empty_state("Il faut d'abord un document",
@@ -812,6 +836,7 @@ def teacher_space():
                 with st.spinner(spinner_text):
                     try:
                         quiz = api_post("/quizzes/generate", json=config)
+                        invalidate_cache()
                         st.session_state["generated_quiz"] = quiz
                     except Exception as e:
                         st.error(f"La génération a échoué : {e}")
@@ -834,6 +859,7 @@ def teacher_space():
                 with colA:
                     if st.button("Publier pour les étudiants", type="primary"):
                         api_post(f"/quizzes/{quiz['id']}/publish")
+                        invalidate_cache()
                         st.success("Quiz publié.")
                 with colB:
                     st.markdown(
@@ -844,7 +870,7 @@ def teacher_space():
 
     # --- 3. Gestion ---------------------------------------------------------
     with tab_manage:
-        quizzes = api_get("/quizzes")
+        quizzes = api_get_cached("/quizzes")
         section("Bibliothèque", "Mes quiz",
                 "" if quizzes else "Vous n'avez encore rien généré.")
 
@@ -877,6 +903,7 @@ def teacher_space():
                     with c1:
                         if not quiz["published"] and st.button("Publier", key=f"pub_{quiz['id']}"):
                             api_post(f"/quizzes/{quiz['id']}/publish")
+                            invalidate_cache()
                             st.rerun()
                     with c2:
                         export_button(quiz, "pdf", "application/pdf")
@@ -886,7 +913,7 @@ def teacher_space():
 
     # --- 4. Carte sémantique ------------------------------------------------
     with tab_map:
-        docs = api_get("/documents")
+        docs = api_get_cached("/documents")
         section("Analyse", "Carte sémantique du cours",
                 "Chaque point est un segment du document, positionné selon son sens : "
                 "deux passages proches traitent de sujets proches. Les amas révèlent "
@@ -907,9 +934,8 @@ def teacher_space():
 
             with st.spinner("Projection des segments en deux dimensions…"):
                 try:
-                    payload = api_get(
-                        f"/documents/{map_options[map_label]}/map",
-                        params={"with_performance": show_perf},
+                    payload = api_get_cached(
+                        f"/documents/{map_options[map_label]}/map", with_performance=show_perf,
                     )
                 except Exception as e:
                     payload = None

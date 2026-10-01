@@ -59,6 +59,14 @@ def _fake_get(calls):
     return get
 
 
+def _fake_post(posts):
+    def post(url, **kwargs):
+        path = urlsplit(url).path
+        posts.append(path)
+        return _Response({**QUIZZES[0], "published": True})
+    return post
+
+
 def _teacher_app():
     st.cache_data.clear()
     at = AppTest.from_file(APP, default_timeout=30)
@@ -88,3 +96,21 @@ def test_exports_are_fetched_only_when_requested():
 
         at.run()
     assert _exports(calls) == ["/quizzes/qa/export/pdf"]
+
+
+def test_reruns_reuse_cached_reads_until_a_write():
+    calls, posts = [], []
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get(calls)), \
+         patch("requests.post", side_effect=_fake_post(posts)):
+        at.run()
+        at.run()
+        assert not at.exception
+        reads = ("/documents", "/quizzes", "/documents/d1/map")
+        assert [calls.count(p) for p in reads] == [1, 1, 1]
+
+        next(b for b in at.button if b.key == "pub_qa").click()
+        at.run()
+        assert not at.exception
+    assert posts == ["/quizzes/qa/publish"]
+    assert calls.count("/quizzes") == 2
