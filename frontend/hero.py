@@ -171,15 +171,15 @@ HERO_HTML = r"""
     <h1 class="rise d2">Le cours devient<br><span class="grad">espace vectoriel.</span></h1>
 
     <p class="lede rise d3">
-      Chaque support depose est decoupe, vectorise, puis interroge par sens.
-      Les passages qui remontent servent a rediger le questionnaire, relu
-      question par question avant de vous etre soumis.
+      Chaque support déposé est découpé, vectorisé, puis interrogé par sens.
+      Les passages qui remontent servent à rédiger le questionnaire, relu
+      question par question avant de vous être soumis.
     </p>
 
     <div class="metrics rise d4">
       <div class="metric"><b>384<em>d</em></b><span>DIMENSIONS</span></div>
       <div class="metric"><b>cosinus</b><span>DISTANCE</span></div>
-      <div class="metric"><b>local</b><span>INFERENCE</span></div>
+      <div class="metric"><b>local</b><span>INFÉRENCE</span></div>
     </div>
   </div>
 </div>
