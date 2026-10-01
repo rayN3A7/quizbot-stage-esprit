@@ -188,7 +188,9 @@ def document_semantic_map(
         raise HTTPException(422, str(e))
 
     if with_performance:
-        semantic_map = overlay_performance(semantic_map, storage.list_results())
+        # Seule la première tentative de chaque étudiant compte : les suivantes
+        # sont de l'entraînement et gonfleraient les scores.
+        semantic_map = overlay_performance(semantic_map, storage.list_results(first_attempts_only=True))
     return semantic_map
 
 
@@ -269,6 +271,7 @@ def submit_answers(
     # la requête : impossible de soumettre des réponses sous une autre identité.
     student_name = current_user.full_name or current_user.username
     result = grade_quiz(quiz, student_name, submission.answers)
+    result.student_username = current_user.username
     storage.save_result(result)
     return result
 

@@ -147,6 +147,11 @@ class GradedAnswer(BaseModel):
 class QuizResult(BaseModel):
     quiz_id: str
     student_name: str
+    # Identité stable : deux comptes peuvent partager le même nom affiché.
+    student_username: str = ""
+    # Rang de la soumission pour ce quiz et cet étudiant. Les tentatives >= 2
+    # sont de l'entraînement : enregistrées, mais hors statistiques agrégées.
+    attempt: int = 1
     submitted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     graded_answers: List[GradedAnswer]
     total_score: float

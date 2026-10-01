@@ -214,6 +214,61 @@ def test_student_token_cannot_retrieve_answers(client, sample_pdf):
     assert [q["correct_choice_index"] for q in exported["questions"]] == expected_answers
 
 
+def test_only_first_attempt_counts_in_the_map_overlay(client, sample_pdf):
+    """Refaire un quiz est permis (auto-évaluation) : la reprise est enregistrée
+    et marquée, mais seule la première tentative entre dans la carte."""
+    from backend import storage
+
+    prof = _auth_headers(client, "prof_attempts", "professeur")
+    alice = _auth_headers(client, "alice_attempts", "etudiant")
+    bob = _auth_headers(client, "bob_attempts", "etudiant")
+    with open(sample_pdf, "rb") as f:
+        doc = client.post("/documents/upload", headers=prof,
+                          files={"file": ("cours.pdf", f, "application/pdf")}).json()
+    quiz = client.post("/quizzes/generate", headers=prof, json={
+        "document_id": doc["id"], "num_questions": 4, "question_type": "mélange",
+    }).json()
+    client.post(f"/quizzes/{quiz['id']}/publish", headers=prof)
+
+    questions = quiz["questions"]
+    blank = [{"question_id": q["id"], "answer": ""} for q in questions]
+    right = [{"question_id": q["id"],
+              "answer": str(q["correct_choice_index"]) if q["type"] == "qcm" else q["reference_answer"]}
+             for q in questions]
+
+    def submit(headers, answers):
+        r = client.post(f"/quizzes/{quiz['id']}/submit", headers=headers,
+                        json={"quiz_id": quiz["id"], "answers": answers})
+        assert r.status_code == 200
+        return r.json()
+
+    # Carte à un seul point dont l'aperçu reprend les énoncés : chaque réponse
+    # corrigée de ce quiz y est rattachée.
+    preview = " ".join(q["question"] for q in questions)
+
+    def overlay():
+        one_point = {"document_id": doc["id"], "method": "acp", "num_points": 1,
+                     "points": [{"x": 0.5, "y": 0.5, "page": 1, "chunk_index": 0, "preview": preview}]}
+        with patch("backend.main.build_semantic_map", return_value=one_point):
+            r = client.get(f"/documents/{doc['id']}/map", headers=prof,
+                           params={"with_performance": True})
+        point = r.json()["points"][0]
+        return point["attempts"], point["score"]
+
+    first = submit(alice, blank)
+    after_first = overlay()
+    second = submit(alice, right)
+    assert (first["attempt"], second["attempt"]) == (1, 2)
+    assert (first["percentage"], second["percentage"]) == (0.0, 100.0)
+    assert overlay() == after_first
+
+    saved = [r for r in storage.list_results(quiz["id"]) if r["student_username"] == "alice_attempts"]
+    assert sorted(r["attempt"] for r in saved) == [1, 2]
+
+    submit(bob, right)
+    assert overlay()[0] == after_first[0] + len(questions)
+
+
 def test_generate_quiz_unknown_document_returns_404(client):
     prof_headers = _auth_headers(client, "prof_404", "professeur")
     r = client.post("/quizzes/generate", headers=prof_headers, json={"document_id": "unknown", "num_questions": 3})

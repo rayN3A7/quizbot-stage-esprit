@@ -12,6 +12,7 @@ DATABASE_URL) — voir database.py et db_models.py.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -75,14 +76,41 @@ def list_quizzes(published_only: bool = False) -> list[Quiz]:
     return sorted(quizzes, key=lambda q: q.created_at, reverse=True)
 
 
+def _student_key(result: dict) -> str:
+    # Les résultats antérieurs n'ont pas de student_username : repli sur le nom affiché.
+    return result.get("student_username") or result.get("student_name", "")
+
+
+def _submitted_ts(result: dict) -> float:
+    try:
+        return datetime.fromisoformat(str(result.get("submitted_at"))).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def save_result(result: QuizResult) -> None:
+    """Enregistre une soumission sans jamais en écraser une autre, et la numérote :
+    une nouvelle tentative du même étudiant sur le même quiz est marquée (attempt >= 2)."""
+    key = result.student_username or result.student_name
+    result.attempt = 1 + sum(1 for r in list_results(result.quiz_id) if _student_key(r) == key)
     results_dir = settings.DATA_DIR / "results"
     results_dir.mkdir(exist_ok=True)
-    path = results_dir / f"{result.quiz_id}_{result.student_name}_{result.submitted_at.timestamp():.0f}.json"
+    # Nom unique : deux soumissions dans la même seconde s'écrasaient l'une l'autre.
+    path = results_dir / f"{result.quiz_id}_{uuid4().hex}.json"
     path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
 
 
-def list_results(quiz_id: Optional[str] = None) -> list[dict]:
+def first_attempts(results: list[dict]) -> list[dict]:
+    """La soumission la plus ancienne de chaque étudiant pour chaque quiz, seule
+    comptée dans les statistiques agrégées. Fondé sur la date plutôt que sur
+    `attempt`, pour couvrir les anciens fichiers et les doubles envois simultanés."""
+    first: dict[tuple, dict] = {}
+    for result in sorted(results, key=_submitted_ts):
+        first.setdefault((result.get("quiz_id"), _student_key(result)), result)
+    return list(first.values())
+
+
+def list_results(quiz_id: Optional[str] = None, *, first_attempts_only: bool = False) -> list[dict]:
     """Retourne les résultats enregistrés, éventuellement filtrés par quiz.
 
     Retourne des dictionnaires bruts plutôt que des QuizResult : la carte
@@ -101,7 +129,7 @@ def list_results(quiz_id: Optional[str] = None) -> list[dict]:
             continue
         if quiz_id is None or out_data.get("quiz_id") == quiz_id:
             out.append(out_data)
-    return out
+    return first_attempts(out) if first_attempts_only else out
 
 
 # --------------------------------------------------------------------------- #
