@@ -638,6 +638,15 @@ def invalidate_cache() -> None:
     _fetch_json.clear()
 
 
+def _flash(key: str, message: str) -> None:
+    st.session_state[f"flash_{key}"] = message
+
+
+def _show_flash(key: str) -> None:
+    if message := st.session_state.pop(f"flash_{key}", None):
+        st.success(message)
+
+
 # --------------------------------------------------------------------------- #
 # Vérification de la connexion au backend
 # --------------------------------------------------------------------------- #
@@ -745,8 +754,13 @@ def teacher_space():
         ["Téléverser un cours", "Générer un quiz", "Mes quiz", "Carte du cours"]
     )
 
+    # Chaque onglet est un fragment : un widget ne relance que son onglet, pas
+    # la page entière. Une écriture relance toute l'app (st.rerun) pour que les
+    # autres onglets la voient ; le message de succès survit via _flash.
+
     # --- 1. Téléversement ---------------------------------------------------
-    with tab_upload:
+    @st.fragment
+    def upload_tab():
         section("Étape 1", "Téléverser un support de cours",
                 "Le document est découpé en segments puis vectorisé : c'est ce qui "
                 "permet de retrouver les passages pertinents au moment de générer un quiz.")
@@ -757,11 +771,14 @@ def teacher_space():
                 try:
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue())}
                     doc = api_post("/documents/upload", files=files)
-                    invalidate_cache()
-                    st.success(f"Document indexé — {doc['num_chunks']} segments créés.")
-                    st.session_state["last_document_id"] = doc["id"]
                 except Exception as e:
                     st.error(f"L'indexation a échoué : {e}")
+                else:
+                    invalidate_cache()
+                    st.session_state["last_document_id"] = doc["id"]
+                    _flash("upload", f"Document indexé — {doc['num_chunks']} segments créés.")
+                    st.rerun()
+        _show_flash("upload")
 
         st.write("")
         docs = api_get_cached("/documents")
@@ -781,7 +798,8 @@ def teacher_space():
                         "Déposez un PDF ou un PPTX ci-dessus pour commencer.")
 
     # --- 2. Génération ------------------------------------------------------
-    with tab_generate:
+    @st.fragment
+    def generate_tab():
         docs = api_get_cached("/documents")
         if not docs:
             section("Étape 2", "Générer un quiz")
@@ -836,10 +854,12 @@ def teacher_space():
                 with st.spinner(spinner_text):
                     try:
                         quiz = api_post("/quizzes/generate", json=config)
-                        invalidate_cache()
-                        st.session_state["generated_quiz"] = quiz
                     except Exception as e:
                         st.error(f"La génération a échoué : {e}")
+                    else:
+                        invalidate_cache()
+                        st.session_state["generated_quiz"] = quiz
+                        st.rerun()
 
             if "generated_quiz" in st.session_state:
                 quiz = st.session_state["generated_quiz"]
@@ -860,7 +880,9 @@ def teacher_space():
                     if st.button("Publier pour les étudiants", type="primary"):
                         api_post(f"/quizzes/{quiz['id']}/publish")
                         invalidate_cache()
-                        st.success("Quiz publié.")
+                        _flash("publish", "Quiz publié.")
+                        st.rerun()
+                    _show_flash("publish")
                 with colB:
                     st.markdown(
                         f'<div class="qb-row__m" style="padding-top:10px;">'
@@ -869,7 +891,8 @@ def teacher_space():
                     )
 
     # --- 3. Gestion ---------------------------------------------------------
-    with tab_manage:
+    @st.fragment
+    def manage_tab():
         quizzes = api_get_cached("/quizzes")
         section("Bibliothèque", "Mes quiz",
                 "" if quizzes else "Vous n'avez encore rien généré.")
@@ -912,7 +935,8 @@ def teacher_space():
 
 
     # --- 4. Carte sémantique ------------------------------------------------
-    with tab_map:
+    @st.fragment
+    def map_tab():
         docs = api_get_cached("/documents")
         section("Analyse", "Carte sémantique du cours",
                 "Chaque point est un segment du document, positionné selon son sens : "
@@ -953,6 +977,11 @@ def teacher_space():
                         f'ont déjà été évalués par au moins une question.</div>',
                         unsafe_allow_html=True,
                     )
+
+    for tab, render in ((tab_upload, upload_tab), (tab_generate, generate_tab),
+                        (tab_manage, manage_tab), (tab_map, map_tab)):
+        with tab:
+            render()
 
 
 # --------------------------------------------------------------------------- #

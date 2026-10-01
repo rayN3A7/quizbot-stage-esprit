@@ -59,10 +59,15 @@ def _fake_get(calls):
     return get
 
 
+NEW_QUIZ = {**QUIZZES[0], "id": "qn", "title": "Quiz généré"}
+
+
 def _fake_post(posts):
     def post(url, **kwargs):
         path = urlsplit(url).path
         posts.append(path)
+        if path == "/quizzes/generate":
+            return _Response(NEW_QUIZ)
         return _Response({**QUIZZES[0], "published": True})
     return post
 
@@ -114,3 +119,23 @@ def test_reruns_reuse_cached_reads_until_a_write():
         assert not at.exception
     assert posts == ["/quizzes/qa/publish"]
     assert calls.count("/quizzes") == 2
+
+
+def test_writes_rerun_the_whole_space_and_keep_their_success_message():
+    calls, posts = [], []
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get(calls)), \
+         patch("requests.post", side_effect=_fake_post(posts)):
+        at.run()
+        next(b for b in at.button if b.label == "Générer le quiz").click()
+        at.run()
+        assert not at.exception
+        titles = [m.value for m in at.markdown if "qb-section__title" in m.value]
+        assert any('qb-section__title">Quiz généré<' in t for t in titles)
+        assert calls.count("/quizzes") == 2
+
+        next(b for b in at.button if b.label == "Publier pour les étudiants").click()
+        at.run()
+        assert not at.exception
+    assert posts == ["/quizzes/generate", "/quizzes/qn/publish"]
+    assert [s.value for s in at.success] == ["Quiz publié."]
