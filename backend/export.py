@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from .config import settings
 from .models import Quiz, QuizResult
@@ -52,31 +53,33 @@ def export_quiz_pdf(quiz: Quiz, include_answers: bool = True) -> Path:
     body = styles["BodyText"]
     small = ParagraphStyle("Small", parent=styles["BodyText"], fontSize=9, textColor=colors.grey)
 
+    # Paragraph interprète un balisage XML : tout contenu (un cours HTML contient
+    # <BR>, <TITLE>...) est échappé ; seuls nos <b> et <i> restent du balisage.
     story = [
-        Paragraph(quiz.title, title_style),
-        Paragraph(f"Document source : {quiz.document_name}", small),
+        Paragraph(escape(quiz.title), title_style),
+        Paragraph(f"Document source : {escape(quiz.document_name)}", small),
         Paragraph(f"Généré le : {quiz.created_at.strftime('%d/%m/%Y %H:%M')}", small),
         HRFlowable(width="100%", color=colors.HexColor("#C8102E"), thickness=1, spaceAfter=10, spaceBefore=10),
     ]
 
     for i, q in enumerate(quiz.questions, start=1):
         story.append(Paragraph(f"Question {i} ({q.type.value.upper()} — {q.difficulty.value})", h2))
-        story.append(Paragraph(q.question, body))
+        story.append(Paragraph(escape(q.question), body))
 
         if q.type.value == "qcm" and q.choices:
             items = []
             for idx, choice in enumerate(q.choices):
-                label = f"{chr(65 + idx)}. {choice}"
+                label = f"{chr(65 + idx)}. {escape(choice)}"
                 if include_answers and idx == q.correct_choice_index:
                     label = f"<b>{label} (bonne réponse)</b>"
                 items.append(ListItem(Paragraph(label, body)))
             story.append(ListFlowable(items, bulletType="bullet"))
         elif include_answers:
             story.append(Spacer(1, 4))
-            story.append(Paragraph(f"<i>Réponse attendue :</i> {q.reference_answer}", body))
+            story.append(Paragraph(f"<i>Réponse attendue :</i> {escape(q.reference_answer)}", body))
 
         if include_answers and q.explanation:
-            story.append(Paragraph(f"<i>Explication :</i> {q.explanation}", small))
+            story.append(Paragraph(f"<i>Explication :</i> {escape(q.explanation)}", small))
         story.append(Spacer(1, 8))
 
     doc.build(story)
