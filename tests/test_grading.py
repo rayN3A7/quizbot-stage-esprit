@@ -74,3 +74,15 @@ def test_grade_quiz_missing_answer_scores_zero():
     quiz = Quiz(title="T", document_name="doc.pdf", questions=[mcq])
     result = grade_quiz(quiz, "Rayen", answers=[])
     assert result.total_score == 0.0
+
+
+def test_grade_quiz_skipped_mcq_sent_as_empty_string_scores_zero():
+    """Le frontend envoie "" pour un QCM sauté (plus de choix A présélectionné)."""
+    from backend.grading import grade_quiz
+    mcq = _mcq_question()
+    quiz = Quiz(title="T", document_name="doc.pdf", questions=[mcq])
+    result = grade_quiz(quiz, "Rayen", [StudentAnswer(question_id=mcq.id, answer="")])
+
+    graded = result.graded_answers[0]
+    assert graded.correct is False and graded.score == 0.0
+    assert result.stats_by_theme == {"Reseaux": 0.0}

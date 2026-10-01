@@ -935,11 +935,15 @@ def student_space():
                 unsafe_allow_html=True,
             )
             if q["type"] == "qcm" and q.get("choices"):
-                choice = st.radio(
-                    "Votre réponse", q["choices"],
+                # Le widget renvoie l'indice, jamais le texte : aucune recherche
+                # textuelle, et rien de présélectionné. Une question sautée part
+                # en "" (comptée fausse) au lieu du choix A.
+                picked = st.radio(
+                    "Votre réponse", range(len(q["choices"])),
+                    format_func=q["choices"].__getitem__, index=None,
                     key=f"answer_{q['id']}", label_visibility="collapsed",
                 )
-                answers[q["id"]] = str(q["choices"].index(choice))
+                answers[q["id"]] = "" if picked is None else str(picked)
             else:
                 answers[q["id"]] = st.text_area(
                     "Votre réponse", key=f"answer_{q['id']}",
