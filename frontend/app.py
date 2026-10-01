@@ -566,10 +566,53 @@ def api_post(path, **kwargs):
 
 def _raise_for_auth(response: requests.Response) -> None:
     if response.status_code == 401:
-        st.session_state.pop("token", None)
-        st.session_state.pop("user", None)
-        st.error("Votre session a expiré. Reconnectez-vous pour continuer.")
-        st.rerun()
+        _expire_session()
+
+
+def _expire_session() -> None:
+    st.session_state.pop("token", None)
+    st.session_state.pop("user", None)
+    st.error("Votre session a expiré. Reconnectez-vous pour continuer.")
+    st.rerun()
+
+
+class _SessionExpired(Exception):
+    pass
+
+
+# Les fonctions en cache ne doivent appeler aucune commande Streamlit : un 401
+# remonte en exception, et le code appelant déconnecte l'utilisateur.
+@st.cache_data(ttl=600, max_entries=32, show_spinner=False)
+def _fetch_export(quiz_id: str, kind: str, token: str) -> bytes:
+    r = requests.get(f"{API_BASE_URL}/quizzes/{quiz_id}/export/{kind}",
+                     headers={"Authorization": f"Bearer {token}"})
+    if r.status_code == 401:
+        raise _SessionExpired
+    r.raise_for_status()
+    return r.content
+
+
+def _mark_export_ready(flag: str) -> None:
+    st.session_state[flag] = True
+
+
+def export_button(quiz: dict, kind: str, mime: str) -> None:
+    """L'export n'est demandé à l'API qu'au clic sur « Préparer », pas à chaque rerun."""
+    flag, label = f"export_ready_{kind}_{quiz['id']}", kind.upper()
+    if not st.session_state.get(flag):
+        st.button(f"Préparer le {label}", key=f"prepare_{kind}_{quiz['id']}",
+                  on_click=_mark_export_ready, args=(flag,))
+        return
+    try:
+        data = _fetch_export(quiz["id"], kind, st.session_state.get("token", ""))
+    except _SessionExpired:
+        _expire_session()
+    except requests.RequestException as e:
+        st.session_state.pop(flag, None)
+        st.error(f"L'export {label} a échoué : {e}")
+        return
+    st.download_button(f"Télécharger le {label}", data=data, file_name=f"{quiz['title']}.{kind}",
+                       mime=mime, key=f"{kind}_{quiz['id']}")
 
 
 # --------------------------------------------------------------------------- #
@@ -836,25 +879,9 @@ def teacher_space():
                             api_post(f"/quizzes/{quiz['id']}/publish")
                             st.rerun()
                     with c2:
-                        pdf_resp = requests.get(
-                            f"{API_BASE_URL}/quizzes/{quiz['id']}/export/pdf",
-                            headers=_auth_headers(),
-                        )
-                        st.download_button(
-                            "Télécharger le PDF", data=pdf_resp.content,
-                            file_name=f"{quiz['title']}.pdf", mime="application/pdf",
-                            key=f"pdf_{quiz['id']}",
-                        )
+                        export_button(quiz, "pdf", "application/pdf")
                     with c3:
-                        json_resp = requests.get(
-                            f"{API_BASE_URL}/quizzes/{quiz['id']}/export/json",
-                            headers=_auth_headers(),
-                        )
-                        st.download_button(
-                            "Télécharger le JSON", data=json_resp.content,
-                            file_name=f"{quiz['title']}.json", mime="application/json",
-                            key=f"json_{quiz['id']}",
-                        )
+                        export_button(quiz, "json", "application/json")
 
 
     # --- 4. Carte sémantique ------------------------------------------------
