@@ -331,6 +331,41 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
   }
 }
 
+/* ---------- chargeur de génération ----------
+   Décoratif : l'API ne renvoie aucune progression, il ne simule donc aucune
+   étape. Une ligne de balayage parcourt trois « feuilles » de cours ; une copie
+   cramoisie des feuilles n'est visible que dans une bande qui suit la ligne
+   (même durée, même courbe), donc chaque feuille s'allume à son passage. */
+.qb-loader { display:flex; align-items:center; gap:24px; padding:20px 22px; margin:14px 0;
+  border-radius:var(--qb-r); border:1px solid var(--qb-line); box-shadow:var(--qb-glow);
+  background:linear-gradient(155deg, var(--qb-raised), var(--qb-surface)); }
+.qb-loader__scene { position:relative; flex:none; width:88px; height:72px; }
+.qb-loader__lit { position:absolute; inset:0; clip-path:inset(-3px 0 61px 0); }
+.qb-loader__sheet { position:absolute; left:8px; right:8px; height:16px; border-radius:6px;
+  border:1px solid var(--qb-line-hi); background:rgba(127,180,255,.06); }
+.qb-loader__sheet:nth-child(1) { top:6px; }
+.qb-loader__sheet:nth-child(2) { top:28px; }
+.qb-loader__sheet:nth-child(3) { top:50px; }
+.qb-loader__lit .qb-loader__sheet { border-color:rgba(255,51,80,.65); background:var(--qb-crimson-soft);
+  box-shadow:0 0 14px -4px rgba(255,51,80,.6); }
+.qb-loader__scan { position:absolute; left:0; right:0; top:0; height:2px; border-radius:2px; translate:0 4px;
+  background:linear-gradient(90deg, transparent, var(--qb-crimson), transparent);
+  box-shadow:0 0 12px rgba(255,51,80,.7); }
+.qb-loader__t { margin:0; font-weight:600; font-size:14.5px; line-height:1.5; color:#fff; }
+.qb-loader__h { margin:4px 0 0; font-family:var(--qb-mono); font-size:11px; color:var(--qb-faint); letter-spacing:.04em; }
+.qb-loader__track { position:relative; max-width:280px; height:2px; margin-top:12px; border-radius:2px;
+  background:var(--qb-line); overflow:clip; }
+.qb-loader__track i { position:absolute; top:0; bottom:0; width:32%; border-radius:2px;
+  background:linear-gradient(90deg, transparent, var(--qb-crimson), transparent); }
+@keyframes qb-scan  { 0%,100% { translate:0 4px } 50% { translate:0 66px } }
+@keyframes qb-band  { 0%,100% { clip-path:inset(-3px 0 61px 0) } 50% { clip-path:inset(59px 0 -1px 0) } }
+@keyframes qb-track { from { translate:-110% 0 } to { translate:330% 0 } }
+@media (prefers-reduced-motion: no-preference) {
+  .qb-loader__scan  { animation:qb-scan 2.6s ease-in-out infinite; }
+  .qb-loader__lit   { animation:qb-band 2.6s ease-in-out infinite; }
+  .qb-loader__track i { animation:qb-track 1.7s cubic-bezier(.45,0,.25,1) infinite; }
+}
+
 /* ---------- sidebar ---------- */
 [data-testid="stSidebar"] { background:var(--qb-deep); border-right:1px solid var(--qb-line); }
 [data-testid="stSidebar"] .block-container { padding-top:1.6rem; }
@@ -602,6 +637,20 @@ def score_ring(percentage: float, score: float, max_score: float) -> None:
         f'<div><p class="qb-score__h">{esc(verdict)}</p>'
         f'<p class="qb-score__s">{score} / {max_score} points</p></div></div>',
         unsafe_allow_html=True,
+    )
+
+
+def loader_html(label: str, hint: str = "") -> str:
+    """Attente de la génération (20 à 60 s en local) : animation décorative, sans
+    fausse progression. role=status pour les lecteurs d'écran."""
+    sheets = '<i class="qb-loader__sheet"></i>' * 3
+    hint_html = f'<p class="qb-loader__h">{_txt(hint)}</p>' if hint else ""
+    return (
+        '<div class="qb-loader" role="status" aria-live="polite">'
+        f'<div class="qb-loader__scene" aria-hidden="true">{sheets}'
+        f'<div class="qb-loader__lit">{sheets}</div><i class="qb-loader__scan"></i></div>'
+        f'<div><p class="qb-loader__t">{_txt(label)}</p>{hint_html}'
+        '<div class="qb-loader__track" aria-hidden="true"><i></i></div></div></div>'
     )
 
 
@@ -935,20 +984,24 @@ def teacher_space():
                     "themes": themes,
                     "use_verification_agent": use_verification_agent,
                 }
-                spinner_text = (
+                loading_text = (
                     "Rédaction puis relecture de chaque question…"
                     if use_verification_agent else
                     "Recherche des passages puis rédaction des questions…"
                 )
-                with st.spinner(spinner_text):
-                    try:
-                        quiz = api_post("/quizzes/generate", json=config)
-                    except Exception as e:
-                        st.error(f"La génération a échoué : {e}")
-                    else:
-                        invalidate_cache()
-                        st.session_state["generated_quiz"] = quiz
-                        st.rerun()
+                hint = ("Le modèle tourne sur cette machine : comptez une minute, parfois plus."
+                        if health["llm_provider"] == "local" else "")
+                loader = st.empty()
+                loader.markdown(loader_html(loading_text, hint), unsafe_allow_html=True)
+                try:
+                    quiz = api_post("/quizzes/generate", json=config)
+                except Exception as e:
+                    loader.empty()
+                    st.error(f"La génération a échoué : {e}")
+                else:
+                    invalidate_cache()
+                    st.session_state["generated_quiz"] = quiz
+                    st.rerun()
 
             if "generated_quiz" in st.session_state:
                 quiz = st.session_state["generated_quiz"]

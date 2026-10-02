@@ -220,3 +220,26 @@ def test_review_cards_are_one_block_and_blank_lines_stay_inside_it():
     assert review[0].startswith('<div class="qb-stack"><article class="qb-q">')
     assert "\n" not in review[0]
     assert "Deuxième ligne 1<br><br>ligne 2 ?" in review[0]
+
+
+# --------------------------------------------------------------------------- #
+# Chargeur de génération : il ne doit jamais rester affiché
+# --------------------------------------------------------------------------- #
+
+def test_generation_loader_never_lingers_after_success_or_failure():
+    def failing_post(url, **kwargs):
+        return _Response({"detail": "Erreur lors de la génération par le LLM : délai dépassé"},
+                         status=502, url=url)
+
+    for post, expect_error in ((_fake_post([]), False), (failing_post, True)):
+        at = _teacher_app()
+        with patch("requests.get", side_effect=_fake_get([])), patch("requests.post", side_effect=post):
+            at.run()
+            next(b for b in at.button if b.label == "Générer le quiz").click()
+            at.run()
+        assert not at.exception
+        # L'attribut, pas le nom de classe : la feuille de style contient « .qb-loader ».
+        assert not [m for m in at.markdown if 'class="qb-loader"' in m.value]
+        errors = [e.value for e in at.error]
+        assert errors == (["La génération a échoué : Erreur lors de la génération par le LLM : délai dépassé"]
+                          if expect_error else [])
