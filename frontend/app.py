@@ -250,11 +250,30 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 .qb-empty__t { font-family:var(--qb-display); font-size:17px; font-weight:600; margin:0 0 7px; color:#fff; }
 .qb-empty__s { color:var(--qb-dim); font-size:13.8px; margin:0; }
 
-/* ---------- apparition ---------- */
-.qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
-  animation:qb-rise .55s cubic-bezier(.16,1,.3,1) both;
+/* ---------- apparition ----------
+   Les animations passent par les propriétés individuelles translate/scale, jamais
+   par transform : une animation remplie (both) l'emporte sur toute déclaration
+   normale, et un transform animé neutralisait les effets de survol.
+   Uniquement hors mouvement réduit : sans animation, tout est visible d'emblée. */
+@keyframes qb-rise   { from{opacity:0;translate:0 12px} to{opacity:1;translate:0 0} }
+@keyframes qb-reveal { from{opacity:0;translate:0 34px} to{opacity:1;translate:0 0} }
+@keyframes qb-focus  { from{scale:.965;filter:blur(5px)} to{scale:1;filter:none} }
+@media (prefers-reduced-motion: no-preference) {
+  /* Repli (sans animation-timeline) : montée à l'affichage. */
+  .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
+    animation:qb-rise .55s cubic-bezier(.16,1,.3,1) both;
+  }
+  /* Révélation liée au défilement de section.main, plus une mise au point à
+     l'affichage pour ce qui est déjà à l'écran : deux jeux de propriétés
+     distincts, donc aucun conflit entre les deux animations. */
+  @supports (animation-timeline: view()) {
+    .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
+      animation:qb-focus .7s cubic-bezier(.16,1,.3,1) both, qb-reveal linear both;
+      animation-timeline:auto, view();
+      animation-range:normal, entry 0% entry 80%;
+    }
+  }
 }
-@keyframes qb-rise { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
 
 /* ---------- sidebar ---------- */
 [data-testid="stSidebar"] { background:var(--qb-deep); border-right:1px solid var(--qb-line); }
