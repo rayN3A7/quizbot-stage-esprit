@@ -142,6 +142,9 @@ class GradedAnswer(BaseModel):
     score: float  # 0.0 - 1.0
     correct_answer: str
     explanation: str
+    # Extrait du cours dont la question est tirée : la carte sémantique s'en sert
+    # pour rattacher la réponse au bon passage. Absent des anciens résultats.
+    source_excerpt: str = ""
 
 
 class QuizResult(BaseModel):

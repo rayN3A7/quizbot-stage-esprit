@@ -353,6 +353,13 @@ def _salvage_question_objects(text: str) -> list[dict]:
     return objects
 
 
+# Porte d'ancrage : un extrait d'au moins GROUNDING_MIN_WORDS mots doit partager
+# une fenêtre de GROUNDING_WINDOW mots consécutifs avec un passage. La carte
+# sémantique s'appuie sur la même garantie pour rattacher les réponses.
+GROUNDING_MIN_WORDS = 4
+GROUNDING_WINDOW = 6
+
+
 def _normalize_for_comparison(text: str) -> str:
     """Normalise le texte pour la comparaison : minuscules, ponctuation → espaces."""
     text = text.lower()
@@ -408,7 +415,7 @@ def _quality_reject_reason(question: Question, passages: List[dict]) -> str | No
             return f"Marqueur de prompt dans {name} : {_quote(value)}"
 
     # --- a) GROUNDING (source_excerpt doit être dans les passages) ---
-    if question.source_excerpt and len(question.source_excerpt.split()) >= 4:
+    if question.source_excerpt and len(question.source_excerpt.split()) >= GROUNDING_MIN_WORDS:
         excerpt_norm = _normalize_for_comparison(question.source_excerpt)
         # Combine tous les passages normalisés
         passages_text = " ".join(p.get("text", "") for p in passages)
@@ -416,7 +423,7 @@ def _quality_reject_reason(question: Question, passages: List[dict]) -> str | No
 
         # Cherche une fenêtre de 6 mots consécutifs
         excerpt_words = excerpt_norm.split()
-        window_size = min(6, len(excerpt_words))
+        window_size = min(GROUNDING_WINDOW, len(excerpt_words))
         found = False
         for i in range(len(excerpt_words) - window_size + 1):
             window = " ".join(excerpt_words[i:i+window_size])

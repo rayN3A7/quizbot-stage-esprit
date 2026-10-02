@@ -45,6 +45,7 @@ def _grade_mcq(question: Question, student_answer: str) -> GradedAnswer:
         score=1.0 if is_correct else 0.0,
         correct_answer=correct_text,
         explanation=question.explanation,
+        source_excerpt=question.source_excerpt,
     )
 
 
@@ -65,6 +66,7 @@ def _grade_open(question: Question, student_answer: str) -> GradedAnswer:
         score=round(similarity, 3),
         correct_answer=question.reference_answer,
         explanation=question.explanation,
+        source_excerpt=question.source_excerpt,
     )
 
 

@@ -32,6 +32,12 @@ class FakeVectorStore:
     def all_texts(self, document_id, limit=400):
         return [c.text for c in self.data.get(document_id, [])[:limit]]
 
+    def raw_chunks(self, document_id, limit=300):
+        chunks = self.data.get(document_id, [])[:limit]
+        return {"documents": [c.text for c in chunks],
+                "metadatas": [{"chunk_index": c.chunk_index, "source_page": c.source_page} for c in chunks],
+                "embeddings": []}
+
 
 def _fake_embed_text(text: str):
     vec = np.zeros(64)
@@ -45,6 +51,7 @@ def client():
     fake_store = FakeVectorStore()
     with patch("backend.main.get_vector_store", return_value=fake_store), \
          patch("backend.quiz_generator.get_vector_store", return_value=fake_store), \
+         patch("backend.semantic_map.get_vector_store", return_value=fake_store), \
          patch("backend.grading.embed_text", side_effect=_fake_embed_text):
         from backend.main import app
         yield TestClient(app)
@@ -242,8 +249,9 @@ def test_only_first_attempt_counts_in_the_map_overlay(client, sample_pdf):
         assert r.status_code == 200
         return r.json()
 
-    # Carte à un seul point dont l'aperçu reprend les énoncés : chaque réponse
-    # corrigée de ce quiz y est rattachée.
+    # Carte à un seul point (le cours de test tient en un chunk, index 0) : chaque
+    # réponse y est rattachée par son extrait ; l'aperçu reprend les énoncés pour
+    # les éventuels extraits trop courts, rattachés à l'ancienne.
     preview = " ".join(q["question"] for q in questions)
 
     def overlay():

@@ -76,6 +76,17 @@ def test_grade_quiz_missing_answer_scores_zero():
     assert result.total_score == 0.0
 
 
+def test_graded_answers_carry_the_question_source_excerpt(fake_embed_text):
+    """La carte sémantique rattache chaque réponse au passage via cet extrait."""
+    from backend.grading import grade_answer
+    mcq, open_q = _mcq_question(), _open_question()
+    mcq.source_excerpt = "Un neurone artificiel calcule une somme ponderee de ses entrees"
+    open_q.source_excerpt = "La retropropagation ajuste les poids en propageant l'erreur"
+    with patch("backend.grading.embed_text", side_effect=fake_embed_text):
+        graded = [grade_answer(mcq, "2"), grade_answer(open_q, "texte")]
+    assert [g.source_excerpt for g in graded] == [mcq.source_excerpt, open_q.source_excerpt]
+
+
 def test_grade_quiz_skipped_mcq_sent_as_empty_string_scores_zero():
     """Le frontend envoie "" pour un QCM sauté (plus de choix A présélectionné)."""
     from backend.grading import grade_quiz

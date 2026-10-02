@@ -23,6 +23,7 @@ from typing import List
 
 import numpy as np
 
+from .quiz_generator import GROUNDING_MIN_WORDS, GROUNDING_WINDOW, _normalize_for_comparison
 from .vectorstore import get_vector_store
 
 
@@ -117,12 +118,34 @@ def build_semantic_map(document_id: str, max_chunks: int = 300) -> dict:
     }
 
 
-def overlay_performance(semantic_map: dict, results: List[dict]) -> dict:
+def document_chunk_texts(document_id: str, max_chunks: int = 300) -> dict[int, str]:
+    """Texte intégral de chaque chunk, indexé comme les points de la carte."""
+    payload = get_vector_store().raw_chunks(document_id, limit=max_chunks)
+    metadatas = payload.get("metadatas") or []
+    texts: dict[int, str] = {}
+    for i, text in enumerate(payload.get("documents") or []):
+        meta = metadatas[i] if i < len(metadatas) else {}
+        texts[(meta or {}).get("chunk_index", i)] = text
+    return texts
+
+
+def _ngrams(words: List[str], n: int) -> set:
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def overlay_performance(
+    semantic_map: dict, results: List[dict], chunk_texts: dict[int, str] | None = None,
+) -> dict:
     """Superpose les résultats des étudiants sur la carte.
 
-    Chaque question porte un `source_excerpt` ; on rattache la question au
-    chunk dont l'aperçu partage le plus de mots avec cet extrait, puis on
-    agrège les scores obtenus par les étudiants sur ce chunk.
+    Une réponse corrigée porte l'extrait de cours de sa question, recopié mot
+    pour mot d'un passage (garanti par la porte d'ancrage) : elle est rattachée
+    au chunk qui contient cet extrait, cherché dans le TEXTE INTÉGRAL du chunk
+    (l'aperçu n'en couvre que les 160 premiers caractères). Un extrait absent
+    du document n'est rattaché nulle part : la question porte sur un autre cours.
+
+    Les anciens résultats, sans extrait exploitable, gardent l'appariement
+    d'origine (énoncé contre aperçu, au moins 3 mots communs).
 
     Un chunk sans question rattachée reste neutre (score None) : il n'a jamais
     été évalué, ce qui est une information différente d'un mauvais score.
@@ -133,21 +156,41 @@ def overlay_performance(semantic_map: dict, results: List[dict]) -> dict:
         (p["chunk_index"], set(p["preview"].lower().split()))
         for p in semantic_map["points"]
     ]
+    texts = chunk_texts or {p["chunk_index"]: p["preview"] for p in semantic_map["points"]}
+    chunk_words = {i: _normalize_for_comparison(t).split() for i, t in texts.items()}
+    grams_cache: dict[tuple[int, int], set] = {}
+
+    def chunk_by_excerpt(words: List[str]) -> int | None:
+        n = min(GROUNDING_WINDOW, len(words))
+        wanted = _ngrams(words, n)
+        best_idx, best_hits = None, 0
+        for chunk_index in sorted(chunk_words):   # à égalité (chevauchement), le premier
+            if (chunk_index, n) not in grams_cache:
+                grams_cache[(chunk_index, n)] = _ngrams(chunk_words[chunk_index], n)
+            hits = len(wanted & grams_cache[(chunk_index, n)])
+            if hits > best_hits:
+                best_idx, best_hits = chunk_index, hits
+        return best_idx
+
+    def chunk_by_question(text: str) -> int | None:
+        words = set(text.lower().split())
+        best_idx, best_overlap = None, 0
+        for chunk_index, preview_words in previews:
+            overlap = len(words & preview_words)
+            if overlap > best_overlap:
+                best_idx, best_overlap = chunk_index, overlap
+        # Un recouvrement d'un seul mot est du bruit : on exige au moins 3.
+        return best_idx if best_overlap >= 3 else None
 
     for result in results:
         for graded in result.get("graded_answers", []):
-            excerpt = str(graded.get("source_excerpt") or graded.get("question") or "")
-            words = set(excerpt.lower().split())
-            if not words:
-                continue
-            best_idx, best_overlap = None, 0
-            for chunk_index, preview_words in previews:
-                overlap = len(words & preview_words)
-                if overlap > best_overlap:
-                    best_idx, best_overlap = chunk_index, overlap
-            # Un recouvrement d'un seul mot est du bruit : on exige au moins 3.
-            if best_idx is not None and best_overlap >= 3:
-                buckets.setdefault(best_idx, []).append(float(graded.get("score", 0.0)))
+            excerpt_words = _normalize_for_comparison(graded.get("source_excerpt") or "").split()
+            if len(excerpt_words) >= GROUNDING_MIN_WORDS:
+                target = chunk_by_excerpt(excerpt_words)
+            else:
+                target = chunk_by_question(str(graded.get("question") or ""))
+            if target is not None:
+                buckets.setdefault(target, []).append(float(graded.get("score", 0.0)))
 
     for point in semantic_map["points"]:
         scores = buckets.get(point["chunk_index"])

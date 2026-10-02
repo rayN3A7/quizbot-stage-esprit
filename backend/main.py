@@ -42,7 +42,7 @@ from .models import (
     Token, UserCreate, UserInDB, UserPublic,
 )
 from .quiz_generator import generate_quiz
-from .semantic_map import build_semantic_map, overlay_performance
+from .semantic_map import build_semantic_map, document_chunk_texts, overlay_performance
 from .quiz_agent import generate_quiz_agentic
 from .vectorstore import get_vector_store
 
@@ -190,7 +190,10 @@ def document_semantic_map(
     if with_performance:
         # Seule la première tentative de chaque étudiant compte : les suivantes
         # sont de l'entraînement et gonfleraient les scores.
-        semantic_map = overlay_performance(semantic_map, storage.list_results(first_attempts_only=True))
+        semantic_map = overlay_performance(
+            semantic_map, storage.list_results(first_attempts_only=True),
+            chunk_texts=document_chunk_texts(document_id),
+        )
     return semantic_map
 
 
