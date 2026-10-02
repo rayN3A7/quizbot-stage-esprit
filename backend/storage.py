@@ -110,6 +110,38 @@ def first_attempts(results: list[dict]) -> list[dict]:
     return list(first.values())
 
 
+def _question_excerpts(quiz_id: Optional[str]) -> Optional[dict[str, str]]:
+    try:
+        quiz = get_quiz(quiz_id) if quiz_id else None
+    except (OSError, ValueError):  # fichier illisible, JSON ou schéma invalide
+        return None
+    return {q.id: q.source_excerpt for q in quiz.questions} if quiz else None
+
+
+def with_source_excerpts(results: list[dict]) -> list[dict]:
+    """Résultats enregistrés avant l'ajout de GradedAnswer.source_excerpt :
+    l'extrait est relu dans le quiz d'origine (quiz_id, question_id). Si le
+    quiz ou la question est introuvable, la réponse reste telle quelle et
+    garde l'appariement d'origine. Les fichiers ne sont pas modifiés."""
+    excerpts_by_quiz: dict[Optional[str], Optional[dict[str, str]]] = {}
+    out = []
+    for result in results:
+        graded = result.get("graded_answers", [])
+        if all("source_excerpt" in g for g in graded):
+            out.append(result)
+            continue
+        quiz_id = result.get("quiz_id")
+        if quiz_id not in excerpts_by_quiz:
+            excerpts_by_quiz[quiz_id] = _question_excerpts(quiz_id)
+        excerpts = excerpts_by_quiz[quiz_id] or {}
+        out.append({**result, "graded_answers": [
+            {**g, "source_excerpt": excerpts[g.get("question_id")]}
+            if "source_excerpt" not in g and g.get("question_id") in excerpts else g
+            for g in graded
+        ]})
+    return out
+
+
 def list_results(quiz_id: Optional[str] = None, *, first_attempts_only: bool = False) -> list[dict]:
     """Retourne les résultats enregistrés, éventuellement filtrés par quiz.
 

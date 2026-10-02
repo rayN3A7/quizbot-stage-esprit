@@ -191,7 +191,8 @@ def document_semantic_map(
         # Seule la première tentative de chaque étudiant compte : les suivantes
         # sont de l'entraînement et gonfleraient les scores.
         semantic_map = overlay_performance(
-            semantic_map, storage.list_results(first_attempts_only=True),
+            semantic_map,
+            storage.with_source_excerpts(storage.list_results(first_attempts_only=True)),
             chunk_texts=document_chunk_texts(document_id),
         )
     return semantic_map

@@ -8,6 +8,7 @@ de QuizBot, ce qui teste réellement le pipeline RAG "retrieval -> prompt ->
 génération -> parsing -> stockage -> correction -> export" ainsi que le
 contrôle d'accès par rôle (professeur / étudiant).
 """
+import json
 from unittest.mock import patch
 
 import numpy as np
@@ -275,6 +276,46 @@ def test_only_first_attempt_counts_in_the_map_overlay(client, sample_pdf):
 
     submit(bob, right)
     assert overlay()[0] == after_first[0] + len(questions)
+
+
+def test_old_result_files_are_attached_through_their_quiz_excerpt(client, sample_pdf):
+    """Résultats enregistrés avant GradedAnswer.source_excerpt : l'extrait est
+    relu dans le quiz ; si le quiz a disparu, l'appariement d'origine reste."""
+    from backend.config import settings
+
+    prof = _auth_headers(client, "prof_backfill", "professeur")
+    with open(sample_pdf, "rb") as f:
+        doc = client.post("/documents/upload", headers=prof,
+                          files={"file": ("cours.pdf", f, "application/pdf")}).json()
+    quiz = client.post("/quizzes/generate", headers=prof, json={
+        "document_id": doc["id"], "num_questions": 4, "question_type": "mélange",
+    }).json()
+
+    def overlay_attempts():
+        # Aperçu sans aucun mot commun avec les énoncés : seul l'extrait peut rattacher.
+        one_point = {"document_id": doc["id"], "method": "acp", "num_points": 1,
+                     "points": [{"x": 0.5, "y": 0.5, "page": 1, "chunk_index": 0, "preview": "zzz"}]}
+        with patch("backend.main.build_semantic_map", return_value=one_point):
+            r = client.get(f"/documents/{doc['id']}/map", headers=prof,
+                           params={"with_performance": True})
+        assert r.status_code == 200
+        return r.json()["points"][0]["attempts"]
+
+    def write_old_format_result(quiz_id, student_name):
+        old = {"quiz_id": quiz_id, "student_name": student_name, "submitted_at": "2026-08-10T23:42:01Z",
+               "graded_answers": [{"question_id": q["id"], "question": q["question"], "student_answer": "",
+                                   "correct": False, "score": 0.0, "correct_answer": "", "explanation": ""}
+                                  for q in quiz["questions"]],
+               "total_score": 0.0, "max_score": float(len(quiz["questions"])), "percentage": 0.0}
+        results_dir = settings.DATA_DIR / "results"
+        results_dir.mkdir(exist_ok=True)
+        (results_dir / f"{quiz_id}_{student_name}.json").write_text(json.dumps(old), encoding="utf-8")
+
+    before = overlay_attempts()
+    write_old_format_result("quiz-supprime", "Orphelin")
+    assert overlay_attempts() == before
+    write_old_format_result(quiz["id"], "Ancien")
+    assert overlay_attempts() == before + len(quiz["questions"])
 
 
 def test_generate_quiz_unknown_document_returns_404(client):
