@@ -73,7 +73,14 @@ THEME_CSS = """
   --qb-body:     'IBM Plex Sans', system-ui, sans-serif;
   --qb-mono:     'IBM Plex Mono', ui-monospace, monospace;
   --qb-r:        16px;
-  --qb-glow:     0 0 0 1px rgba(140,180,240,.07), 0 18px 50px -24px rgba(0,0,0,.9);
+  /* Ombres en couches : liseré, reflet du bord haut, contact, proche, ambiante. */
+  --qb-glow:     0 0 0 1px rgba(140,180,240,.07), inset 0 1px 0 rgba(255,255,255,.04),
+                 0 1px 2px rgba(0,0,0,.45), 0 8px 18px -10px rgba(0,0,0,.7),
+                 0 26px 60px -30px rgba(0,0,0,.9);
+  /* Carte soulevée (survol) : contact plus net, ombre portée plus longue et teintée. */
+  --qb-lift:     0 0 0 1px rgba(255,51,80,.14), inset 0 1px 0 rgba(255,255,255,.06),
+                 0 2px 3px rgba(0,0,0,.5), 0 16px 32px -16px rgba(0,0,0,.85),
+                 0 44px 80px -36px rgba(224,22,52,.45);
 }
 
 html, body, [class*="css"], .stApp, .stMarkdown, p, span, div, label, input, textarea {
@@ -142,7 +149,10 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 }
 .qb-card { border-radius:var(--qb-r); padding:20px 22px; }
 .qb-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(152px,1fr)); gap:12px; }
-.qb-stat { border-radius:13px; padding:16px 18px; position:relative; overflow:hidden; }
+/* overflow:clip et non hidden sur les cartes : hidden en fait des conteneurs de
+   défilement, et les couches internes animées par view() se rattacheraient à la
+   carte (qui ne défile pas) au lieu de section.main : elles resteraient figées. */
+.qb-stat { border-radius:13px; padding:16px 18px; position:relative; overflow:clip; }
 .qb-stat::before {
   content:''; position:absolute; left:0; right:0; top:0; height:1px;
   background:linear-gradient(90deg,transparent,var(--qb-azure),transparent); opacity:.4;
@@ -161,21 +171,25 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 
 /* ---------- signature : la carte question en volume ---------- */
 .qb-q {
-  display:flex; border-radius:var(--qb-r); overflow:hidden; margin-bottom:13px;
-  transform-style:preserve-3d; transition:transform .3s cubic-bezier(.16,1,.3,1), box-shadow .3s ease, border-color .3s ease;
+  display:flex; border-radius:var(--qb-r); overflow:clip; margin-bottom:13px;
+  position:relative; isolation:isolate; transform-origin:50% 100%;
+  transition:box-shadow .3s ease, border-color .3s ease;
 }
-.qb-q:hover {
-  transform:translateY(-3px) rotateX(1.6deg);
-  border-color:var(--qb-line-hi);
-  box-shadow:0 0 0 1px rgba(255,51,80,.14), 0 30px 60px -28px rgba(224,22,52,.5);
+/* Couche de lumière derrière le contenu : plan « rapide » de la parallaxe. */
+.qb-q::before {
+  content:''; position:absolute; z-index:0; pointer-events:none;
+  top:-35%; right:-12%; width:58%; height:150%;
+  background:radial-gradient(closest-side, rgba(127,180,255,.09), transparent);
 }
+.qb-q:hover { border-color:var(--qb-line-hi); box-shadow:var(--qb-lift); }
 .qb-q__margin {
   flex:none; width:62px; border-right:1px solid var(--qb-line);
   background:linear-gradient(180deg, rgba(255,51,80,.10), transparent);
   display:flex; justify-content:center; padding-top:19px;
+  position:relative; z-index:1;
 }
 .qb-q__num { font-family:var(--qb-mono); font-size:13px; font-weight:500; color:var(--qb-crimson); letter-spacing:-.02em; }
-.qb-q__body { padding:17px 22px 19px; flex:1; min-width:0; }
+.qb-q__body { padding:17px 22px 19px; flex:1; min-width:0; position:relative; z-index:1; }
 .qb-q__meta { margin-bottom:11px; }
 .qb-q__text { font-size:15.5px; font-weight:500; line-height:1.58; margin:0 0 13px; color:#fff; }
 .qb-q__choices { list-style:none; padding:0; margin:0; }
@@ -226,9 +240,9 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 .qb-score__s { font-family:var(--qb-mono); font-size:13px; color:var(--qb-dim); }
 
 /* ---------- résultats ---------- */
-.qb-res { border-radius:13px; padding:15px 18px; margin-bottom:10px; position:relative; overflow:hidden;
-  transition:transform .25s cubic-bezier(.16,1,.3,1), border-color .25s ease; }
-.qb-res:hover { transform:translateX(3px); border-color:var(--qb-line-hi); }
+.qb-res { border-radius:13px; padding:15px 18px; margin-bottom:10px; position:relative; overflow:clip;
+  transform-origin:0% 50%; transition:box-shadow .3s ease, border-color .25s ease; }
+.qb-res:hover { border-color:var(--qb-line-hi); box-shadow:var(--qb-lift); }
 .qb-res::before { content:''; position:absolute; left:0; top:0; bottom:0; width:2px; }
 .qb-res--ok::before { background:linear-gradient(180deg,var(--qb-valid),transparent); }
 .qb-res--ko::before { background:linear-gradient(180deg,var(--qb-crimson),transparent); }
@@ -238,8 +252,8 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 
 /* ---------- lignes & vides ---------- */
 .qb-row { display:flex; align-items:center; gap:15px; border-radius:13px; padding:14px 17px; margin-bottom:9px;
-  transition:transform .25s cubic-bezier(.16,1,.3,1), border-color .25s ease; }
-.qb-row:hover { transform:translateX(3px); border-color:var(--qb-line-hi); }
+  overflow:clip; transform-origin:0% 50%; transition:box-shadow .3s ease, border-color .25s ease; }
+.qb-row:hover { border-color:var(--qb-line-hi); box-shadow:var(--qb-lift); }
 .qb-row__i { width:36px; height:36px; border-radius:10px; background:var(--qb-azure-soft); color:var(--qb-azure);
   display:flex; align-items:center; justify-content:center; flex:none; font-size:15px;
   border:1px solid rgba(127,180,255,.2); }
@@ -290,6 +304,30 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
       animation-timeline:auto, view();
       animation-range:normal, entry 0% entry 80%;
     }
+  }
+}
+
+/* ---------- profondeur ----------
+   perspective() dans la transformation elle-même : un vrai 3D sans dépendre d'un
+   parent (ici des conteneurs internes de Streamlit). Inclinaison fixe au survol,
+   en CSS seul, qui laisse le texte sélectionnable. Au défilement, les couches
+   internes glissent à des vitesses différentes : numéro et icône lents, lumière
+   rapide en sens inverse, contenu immobile. */
+@keyframes qb-layer-slow  { from{translate:0 9px}   to{translate:0 -9px} }
+@keyframes qb-layer-fast  { from{translate:0 -30px} to{translate:0 30px} }
+@keyframes qb-layer-sweep { from{translate:-40% 0}  to{translate:40% 0} }
+@media (prefers-reduced-motion: no-preference) {
+  .qb-q, .qb-row, .qb-res {
+    transition:transform .55s cubic-bezier(.16,1,.3,1), box-shadow .45s cubic-bezier(.16,1,.3,1),
+               border-color .3s ease;
+  }
+  .qb-q:hover   { transform:perspective(1100px) translateY(-4px) rotateX(3.2deg); }
+  .qb-row:hover,
+  .qb-res:hover { transform:perspective(900px) translateX(4px) rotateY(-3.2deg); }
+  @supports (animation-timeline: view()) {
+    .qb-q__num, .qb-row__i { animation:qb-layer-slow linear both;  animation-timeline:view(); }
+    .qb-q::before          { animation:qb-layer-fast linear both;  animation-timeline:view(); }
+    .qb-stat::before       { animation:qb-layer-sweep linear both; animation-timeline:view(); }
   }
 }
 
