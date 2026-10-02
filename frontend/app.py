@@ -582,34 +582,38 @@ class _SessionExpired(Exception):
 
 # Les fonctions en cache ne doivent appeler aucune commande Streamlit : un 401
 # remonte en exception, et le code appelant déconnecte l'utilisateur.
-@st.cache_data(ttl=600, max_entries=32, show_spinner=False)
-def _fetch_export(quiz_id: str, kind: str, token: str) -> bytes:
+#
+# Clé de cache : (quiz, format, publié). Le jeton n'en fait PAS partie (préfixe
+# « _ », ignoré par st.cache_data) : le cache est partagé entre toutes les
+# sessions de professeurs, et une reconnexion ne refait pas les exports.
+# C'est sûr uniquement parce qu'aujourd'hui tout professeur voit tous les quiz
+# (GET /quizzes renvoie tout au rôle professeur ; les exports lui sont réservés).
+# Si une visibilité par professeur est ajoutée, cette clé devient une FUITE : un
+# professeur recevrait l'export mis en cache par un autre sans que l'API ne
+# vérifie ses droits. Il faudra alors remettre l'identité du professeur dans la clé.
+# « published » est dans la clé car l'export JSON contient ce drapeau ; rien
+# d'autre ne change après la génération, d'où l'absence d'expiration.
+@st.cache_data(max_entries=512, show_spinner=False)
+def _fetch_export(quiz_id: str, kind: str, published: bool, _token: str) -> bytes:
     r = requests.get(f"{API_BASE_URL}/quizzes/{quiz_id}/export/{kind}",
-                     headers={"Authorization": f"Bearer {token}"})
+                     headers={"Authorization": f"Bearer {_token}"})
     if r.status_code == 401:
         raise _SessionExpired
     r.raise_for_status()
     return r.content
 
 
-def _mark_export_ready(flag: str) -> None:
-    st.session_state[flag] = True
-
-
 def export_button(quiz: dict, kind: str, mime: str) -> None:
-    """L'export n'est demandé à l'API qu'au clic sur « Préparer », pas à chaque rerun."""
-    flag, label = f"export_ready_{kind}_{quiz['id']}", kind.upper()
-    if not st.session_state.get(flag):
-        st.button(f"Préparer le {label}", key=f"prepare_{kind}_{quiz['id']}",
-                  on_click=_mark_export_ready, args=(flag,))
-        return
+    """Téléchargement en un clic : l'export est récupéré à l'affichage de
+    « Mes quiz » puis gardé en cache. Un export en échec n'affiche son erreur
+    que pour ce quiz ; le reste de l'onglet s'affiche normalement."""
+    label = kind.upper()
     try:
-        data = _fetch_export(quiz["id"], kind, st.session_state.get("token", ""))
+        data = _fetch_export(quiz["id"], kind, quiz["published"], st.session_state.get("token", ""))
     except _SessionExpired:
         _expire_session()
     except requests.RequestException as e:
-        st.session_state.pop(flag, None)
-        st.error(f"L'export {label} a échoué : {e}")
+        st.error(f"Export {label} indisponible : {e}")
         return
     st.download_button(f"Télécharger le {label}", data=data, file_name=f"{quiz['title']}.{kind}",
                        mime=mime, key=f"{kind}_{quiz['id']}")
