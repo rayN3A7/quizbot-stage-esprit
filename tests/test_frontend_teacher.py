@@ -41,7 +41,7 @@ class _Response:
             raise requests.HTTPError(f"{self.status_code} Server Error for url: {self.url}")
 
 
-def _fake_get(calls, quizzes=QUIZZES, fail=()):
+def _fake_get(calls, quizzes=QUIZZES, fail=(), docs=(DOC,)):
     def get(url, **kwargs):
         path = urlsplit(url).path
         calls.append(path)
@@ -50,7 +50,7 @@ def _fake_get(calls, quizzes=QUIZZES, fail=()):
         if path == "/health":
             return _Response({"status": "ok", "llm_provider": "mock"})
         if path == "/documents":
-            return _Response([DOC])
+            return _Response(list(docs))
         if path == "/quizzes":
             return _Response(quizzes)
         if path == "/documents/d1/map":
@@ -66,12 +66,12 @@ def _fake_get(calls, quizzes=QUIZZES, fail=()):
 NEW_QUIZ = {**QUIZZES[0], "id": "qn", "title": "Quiz généré"}
 
 
-def _fake_post(posts, quizzes=None):
+def _fake_post(posts, quizzes=None, generated=NEW_QUIZ):
     def post(url, **kwargs):
         path = urlsplit(url).path
         posts.append(path)
         if path == "/quizzes/generate":
-            return _Response(NEW_QUIZ)
+            return _Response(generated)
         for quiz in quizzes or []:
             if path == f"/quizzes/{quiz['id']}/publish":
                 quiz["published"] = True
@@ -177,3 +177,46 @@ def test_writes_rerun_the_whole_space_and_keep_their_success_message():
         assert not at.exception
     assert posts == ["/quizzes/generate", "/quizzes/qn/publish"]
     assert [s.value for s in at.success] == ["Quiz publié."]
+
+
+# --------------------------------------------------------------------------- #
+# Groupes rendus d'un seul bloc (entrée échelonnée par --i)
+# --------------------------------------------------------------------------- #
+
+def _blocks_with(at, marker):
+    return [m.value for m in at.markdown if marker in m.value]
+
+
+def test_document_library_is_one_staggered_block_with_escaped_names():
+    docs = [{**DOC, "id": f"d{k}", "filename": name}
+            for k, name in enumerate(["cours.pdf", "<img src=x onerror=alert(1)>.pdf", "tp.pptx"])]
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get([], docs=docs)):
+        at.run()
+    assert not at.exception
+    library = _blocks_with(at, 'class="qb-row"')
+    assert len(library) == 1
+    assert library[0].count('class="qb-row"') == 3
+    # Enfants directs d'un même .qb-stack : le CSS les décale par :nth-child.
+    assert library[0].startswith('<div class="qb-stack"><div class="qb-row">')
+    assert "&lt;img src=x onerror=alert(1)&gt;.pdf" in library[0] and "<img" not in library[0]
+
+
+def test_review_cards_are_one_block_and_blank_lines_stay_inside_it():
+    generated = {**NEW_QUIZ, "questions": [
+        {**QUIZZES[0]["questions"][0], "id": f"g{k}", "question": text}
+        for k, text in enumerate(["Première ?", "Deuxième ligne 1\n\nligne 2 ?", "Troisième ?"])
+    ]}
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get([])), \
+         patch("requests.post", side_effect=_fake_post([], generated=generated)):
+        at.run()
+        next(b for b in at.button if b.label == "Générer le quiz").click()
+        at.run()
+    assert not at.exception
+    review = _blocks_with(at, 'class="qb-q"')
+    assert len(review) == 1
+    assert review[0].count('<article class="qb-q"') == 3
+    assert review[0].startswith('<div class="qb-stack"><article class="qb-q">')
+    assert "\n" not in review[0]
+    assert "Deuxième ligne 1<br><br>ligne 2 ?" in review[0]

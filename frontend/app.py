@@ -255,6 +255,22 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
    par transform : une animation remplie (both) l'emporte sur toute déclaration
    normale, et un transform animé neutralisait les effets de survol.
    Uniquement hors mouvement réduit : sans animation, tout est visible d'emblée. */
+/* --i : rang dans un groupe rendu d'un seul bloc (.qb-stack, .qb-grid), d'où un
+   décalage d'entrée de 70 ms par élément, plafonné au 13e. Posé ici par
+   :nth-child et non en style en ligne : le rendu Markdown de Streamlit retire
+   les propriétés personnalisées des attributs style. */
+.qb-stack > :nth-child(2),  .qb-grid > :nth-child(2)  { --i:1 }
+.qb-stack > :nth-child(3),  .qb-grid > :nth-child(3)  { --i:2 }
+.qb-stack > :nth-child(4),  .qb-grid > :nth-child(4)  { --i:3 }
+.qb-stack > :nth-child(5),  .qb-grid > :nth-child(5)  { --i:4 }
+.qb-stack > :nth-child(6),  .qb-grid > :nth-child(6)  { --i:5 }
+.qb-stack > :nth-child(7),  .qb-grid > :nth-child(7)  { --i:6 }
+.qb-stack > :nth-child(8),  .qb-grid > :nth-child(8)  { --i:7 }
+.qb-stack > :nth-child(9),  .qb-grid > :nth-child(9)  { --i:8 }
+.qb-stack > :nth-child(10), .qb-grid > :nth-child(10) { --i:9 }
+.qb-stack > :nth-child(11), .qb-grid > :nth-child(11) { --i:10 }
+.qb-stack > :nth-child(12), .qb-grid > :nth-child(12) { --i:11 }
+.qb-stack > :nth-child(n+13), .qb-grid > :nth-child(n+13) { --i:12 }
 @keyframes qb-rise   { from{opacity:0;translate:0 12px} to{opacity:1;translate:0 0} }
 @keyframes qb-reveal { from{opacity:0;translate:0 34px} to{opacity:1;translate:0 0} }
 @keyframes qb-focus  { from{scale:.965;filter:blur(5px)} to{scale:1;filter:none} }
@@ -262,6 +278,7 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
   /* Repli (sans animation-timeline) : montée à l'affichage. */
   .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
     animation:qb-rise .55s cubic-bezier(.16,1,.3,1) both;
+    animation-delay:calc(var(--i, 0) * 70ms);
   }
   /* Révélation liée au défilement de section.main, plus une mise au point à
      l'affichage pour ce qui est déjà à l'écran : deux jeux de propriétés
@@ -269,6 +286,7 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
   @supports (animation-timeline: view()) {
     .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
       animation:qb-focus .7s cubic-bezier(.16,1,.3,1) both, qb-reveal linear both;
+      animation-delay:calc(var(--i, 0) * 70ms), 0s;
       animation-timeline:auto, view();
       animation-range:normal, entry 0% entry 80%;
     }
@@ -431,10 +449,23 @@ def section(eyebrow: str, title: str, sub: str = "") -> None:
     )
 
 
+def _txt(value) -> str:
+    """Texte échappé tenant sur une seule ligne de source. Dans un bloc HTML, une
+    ligne vide termine le bloc pour le parseur Markdown : la suite sortirait de sa
+    carte, et d'un groupe rendu d'un seul tenant, tout ce qui la suit."""
+    return esc(str(value)).replace("\r\n", "\n").replace("\n", "<br>")
+
+
+def stack(items) -> None:
+    """Rend un groupe en un seul bloc : ses éléments entrent l'un après l'autre,
+    décalés selon leur rang (voir --i dans le CSS)."""
+    st.markdown(f'<div class="qb-stack">{"".join(items)}</div>', unsafe_allow_html=True)
+
+
 def stats(items: list[tuple[str, str]]) -> None:
     cells = "".join(
-        f'<div class="qb-stat"><div class="qb-stat__n">{esc(str(n))}</div>'
-        f'<div class="qb-stat__l">{esc(label)}</div></div>'
+        f'<div class="qb-stat"><div class="qb-stat__n">{_txt(n)}</div>'
+        f'<div class="qb-stat__l">{_txt(label)}</div></div>'
         for n, label in items
     )
     st.markdown(f'<div class="qb-grid">{cells}</div>', unsafe_allow_html=True)
@@ -448,60 +479,58 @@ def empty_state(title: str, sub: str) -> None:
     )
 
 
-def row(icon: str, name: str, meta: str) -> None:
-    st.markdown(
-        f'<div class="qb-row"><div class="qb-row__i">{esc(icon)}</div><div>'
-        f'<div class="qb-row__n">{esc(name)}</div>'
-        f'<div class="qb-row__m">{esc(meta)}</div></div></div>',
-        unsafe_allow_html=True,
+def row_html(icon: str, name: str, meta: str) -> str:
+    return (
+        f'<div class="qb-row"><div class="qb-row__i">{_txt(icon)}</div><div>'
+        f'<div class="qb-row__n">{_txt(name)}</div>'
+        f'<div class="qb-row__m">{_txt(meta)}</div></div></div>'
     )
 
 
-def question_card(index: int, q: dict) -> None:
+def question_card_html(index: int, q: dict) -> str:
     """Élément signature : la question rendue comme une ligne de copie corrigée."""
     tags = (
-        f'<span class="qb-tag qb-tag--crimson">{esc(q["type"])}</span>'
-        f'<span class="qb-tag">{esc(q.get("difficulty", ""))}</span>'
+        f'<span class="qb-tag qb-tag--crimson">{_txt(q["type"])}</span>'
+        f'<span class="qb-tag">{_txt(q.get("difficulty", ""))}</span>'
     )
     if q.get("theme"):
-        tags += f'<span class="qb-tag">{esc(q["theme"])}</span>'
+        tags += f'<span class="qb-tag">{_txt(q["theme"])}</span>'
 
     if q["type"] == "qcm" and q.get("choices"):
         lis = ""
-        for i, choice in enumerate(q["choices"]):
-            ok = i == q.get("correct_choice_index")
+        for k, choice in enumerate(q["choices"]):
+            ok = k == q.get("correct_choice_index")
             mark = '<span class="qb-q__mark">✓</span>' if ok else ""
             lis += (
                 f'<li class="{"is-correct" if ok else ""}">'
-                f'<span class="qb-q__key">{chr(65 + i)}</span>'
-                f'<span>{esc(str(choice))}</span>{mark}</li>'
+                f'<span class="qb-q__key">{chr(65 + k)}</span>'
+                f'<span>{_txt(choice)}</span>{mark}</li>'
             )
         answer_html = f'<ul class="qb-q__choices">{lis}</ul>'
     else:
         answer_html = (
             f'<ul class="qb-q__choices"><li class="is-correct">'
             f'<span class="qb-q__key">RÉP</span>'
-            f'<span>{esc(str(q.get("reference_answer", "")))}</span>'
+            f'<span>{_txt(q.get("reference_answer", ""))}</span>'
             f'<span class="qb-q__mark">✓</span></li></ul>'
         )
 
     note = ""
     if q.get("explanation"):
-        note += f'<div class="qb-q__note"><b>Pourquoi</b> — {esc(q["explanation"])}</div>'
+        note += f'<div class="qb-q__note"><b>Pourquoi</b> — {_txt(q["explanation"])}</div>'
     if q.get("source_excerpt"):
         excerpt = str(q["source_excerpt"])[:180]
         note += (
             f'<div class="qb-q__note"><b>Extrait du cours</b><br>'
-            f'<span class="qb-q__src">{esc(excerpt)}…</span></div>'
+            f'<span class="qb-q__src">{_txt(excerpt)}…</span></div>'
         )
 
-    st.markdown(
+    return (
         f'<article class="qb-q"><div class="qb-q__margin">'
         f'<span class="qb-q__num">{index:02d}</span></div>'
         f'<div class="qb-q__body"><div class="qb-q__meta">{tags}</div>'
-        f'<p class="qb-q__text">{esc(q["question"])}</p>'
-        f'{answer_html}{note}</div></article>',
-        unsafe_allow_html=True,
+        f'<p class="qb-q__text">{_txt(q["question"])}</p>'
+        f'{answer_html}{note}</div></article>'
     )
 
 
@@ -538,18 +567,17 @@ def score_ring(percentage: float, score: float, max_score: float) -> None:
     )
 
 
-def result_row(g: dict) -> None:
+def result_row_html(g: dict) -> str:
     ok = bool(g["correct"])
-    st.markdown(
+    return (
         f'<div class="qb-res qb-res--{"ok" if ok else "ko"}">'
-        f'<p class="qb-res__q">{esc(g["question"])}</p>'
+        f'<p class="qb-res__q">{_txt(g["question"])}</p>'
         f'<div class="qb-res__l">Votre réponse</div>'
-        f'<div class="qb-res__v">{esc(str(g["student_answer"]) or "— (vide)")}</div>'
+        f'<div class="qb-res__v">{_txt(str(g["student_answer"]) or "— (vide)")}</div>'
         f'<div class="qb-res__l">Réponse attendue</div>'
-        f'<div class="qb-res__v">{esc(str(g["correct_answer"]))}</div>'
-        + (f'<div class="qb-q__note">{esc(g["explanation"])}</div>' if g.get("explanation") else "")
-        + '</div>',
-        unsafe_allow_html=True,
+        f'<div class="qb-res__v">{_txt(g["correct_answer"])}</div>'
+        + (f'<div class="qb-q__note">{_txt(g["explanation"])}</div>' if g.get("explanation") else "")
+        + '</div>'
     )
 
 
@@ -813,9 +841,9 @@ def teacher_space():
                 (sum(d["num_chunks"] for d in docs), "segments"),
             ])
             st.write("")
-            for d in docs:
-                row("📄", d["filename"],
-                    f"{d['num_chunks']} segments · déposé par {d['uploaded_by']}")
+            stack(row_html("📄", d["filename"],
+                           f"{d['num_chunks']} segments · déposé par {d['uploaded_by']}")
+                  for d in docs)
         else:
             empty_state("Aucun document pour l'instant",
                         "Déposez un PDF ou un PPTX ci-dessus pour commencer.")
@@ -894,8 +922,7 @@ def teacher_space():
                 if quiz.get("agent_report"):
                     agent_report(quiz["agent_report"])
 
-                for i, q in enumerate(quiz["questions"], start=1):
-                    question_card(i, q)
+                stack(question_card_html(n, q) for n, q in enumerate(quiz["questions"], start=1))
 
                 st.write("")
                 colA, colB = st.columns([1, 2])
@@ -1037,7 +1064,7 @@ def student_space():
             st.markdown(
                 f'<div style="margin:18px 0 6px;">'
                 f'<span class="qb-tag qb-tag--crimson">question {i:02d}</span>'
-                f'<p class="qb-q__text" style="margin-top:9px;">{esc(q["question"])}</p></div>',
+                f'<p class="qb-q__text" style="margin-top:9px;">{_txt(q["question"])}</p></div>',
                 unsafe_allow_html=True,
             )
             if q["type"] == "qcm" and q.get("choices"):
@@ -1088,8 +1115,7 @@ def student_space():
 
         st.write("")
         section("Détail", "Question par question")
-        for g in result["graded_answers"]:
-            result_row(g)
+        stack(result_row_html(g) for g in result["graded_answers"])
 
 
 # --------------------------------------------------------------------------- #

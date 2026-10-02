@@ -48,11 +48,11 @@ def _fake_get(url, **kwargs):
     raise AssertionError(f"appel inattendu : GET {url}")
 
 
-def _student_app(submissions):
+def _student_app(submissions, result=RESULT):
     def fake_post(url, **kwargs):
         assert url.endswith("/quizzes/qz1/submit"), url
         submissions.append(kwargs["json"])
-        return _Response(RESULT)
+        return _Response(result)
 
     at = AppTest.from_file(APP, default_timeout=30)
     at.session_state["token"] = "jeton"
@@ -80,3 +80,27 @@ def test_mcq_choices_are_not_preselected_and_skipped_question_sends_empty():
             {"question_id": "m2", "answer": "2"},
         ],
     }]
+
+
+def test_result_rows_are_one_block_and_multiline_answers_stay_inside_it():
+    """Une réponse ouverte sur plusieurs paragraphes contient une ligne vide :
+    dans un bloc HTML, elle ferait sortir la suite de sa carte."""
+    graded = [
+        {"question_id": "m1", "question": "Question sautée ?", "student_answer": "", "correct": False,
+         "score": 0.0, "correct_answer": "B1", "explanation": ""},
+        {"question_id": "m2", "question": "Question répondue ?", "student_answer": "ligne 1\n\nligne 2",
+         "correct": True, "score": 1.0, "correct_answer": "C2", "explanation": "Parce que."},
+    ]
+    submissions = []
+    at, fake_post = _student_app(submissions, result={**RESULT, "graded_answers": graded})
+    with patch("requests.get", side_effect=_fake_get), patch("requests.post", side_effect=fake_post):
+        at.run()
+        next(b for b in at.button if b.label == "Remettre ma copie").click()
+        at.run()
+    assert not at.exception
+    rows = [m.value for m in at.markdown if 'class="qb-res' in m.value]
+    assert len(rows) == 1
+    assert rows[0].count('class="qb-res qb-res--') == 2
+    assert rows[0].startswith('<div class="qb-stack"><div class="qb-res qb-res--')
+    assert "\n" not in rows[0]
+    assert "ligne 1<br><br>ligne 2" in rows[0] and "— (vide)" in rows[0]
