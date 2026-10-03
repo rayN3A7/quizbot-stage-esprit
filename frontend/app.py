@@ -31,6 +31,7 @@ import streamlit.components.v1 as components
 # `streamlit run frontend/app.py` place déjà frontend/ sur sys.path, mais on
 # sécurise le cas où l'app est lancée depuis un autre répertoire de travail.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gradebook_view import answer_text, gradebook_csv, num, pct, when  # noqa: E402
 from hero import HERO_HEIGHT, HERO_HTML  # noqa: E402
 from semantic_map_view import MAP_HEIGHT, build_map_html  # noqa: E402
 
@@ -654,15 +655,19 @@ def loader_html(label: str, hint: str = "") -> str:
     )
 
 
-def result_row_html(g: dict) -> str:
+def result_row_html(g: dict, answer_label: str = "Votre réponse", answer: str | None = None,
+                    points: bool = False) -> str:
     ok = bool(g["correct"])
+    shown = str(g["student_answer"]) if answer is None else answer
     return (
         f'<div class="qb-res qb-res--{"ok" if ok else "ko"}">'
         f'<p class="qb-res__q">{_txt(g["question"])}</p>'
-        f'<div class="qb-res__l">Votre réponse</div>'
-        f'<div class="qb-res__v">{_txt(str(g["student_answer"]) or "— (vide)")}</div>'
+        f'<div class="qb-res__l">{esc(answer_label)}</div>'
+        f'<div class="qb-res__v">{_txt(shown or "— (vide)")}</div>'
         f'<div class="qb-res__l">Réponse attendue</div>'
         f'<div class="qb-res__v">{_txt(g["correct_answer"])}</div>'
+        + (f'<div class="qb-res__l">Points</div><div class="qb-res__v">{num(g["score"])} / 1</div>'
+           if points else "")
         + (f'<div class="qb-q__note">{_txt(g["explanation"])}</div>' if g.get("explanation") else "")
         + '</div>'
     )
@@ -888,8 +893,8 @@ def teacher_space():
     masthead("Espace enseignant")
     st.write("")
 
-    tab_upload, tab_generate, tab_manage, tab_map = st.tabs(
-        ["Téléverser un cours", "Générer un quiz", "Mes quiz", "Carte du cours"]
+    tab_upload, tab_generate, tab_manage, tab_results, tab_map = st.tabs(
+        ["Téléverser un cours", "Générer un quiz", "Mes quiz", "Résultats", "Carte du cours"]
     )
 
     # Chaque onglet est un fragment : un widget ne relance que son onglet, pas
@@ -1075,7 +1080,90 @@ def teacher_space():
                         export_button(quiz, "json", "application/json")
 
 
-    # --- 4. Carte sémantique ------------------------------------------------
+    # --- 4. Résultats -------------------------------------------------------
+    @st.fragment
+    def results_tab():
+        quizzes = [q for q in api_get_cached("/quizzes") or [] if q["published"]]
+        section("Suivi", "Résultats des étudiants",
+                "Seule la première tentative de chaque étudiant compte dans les statistiques : "
+                "les reprises sont de l'entraînement.")
+        if not quizzes:
+            empty_state("Aucun quiz publié",
+                        "Publiez un quiz : les copies des étudiants apparaîtront ici.")
+            return
+
+        # Par identifiant : deux quiz peuvent porter le même titre.
+        by_id = {q["id"]: q for q in quizzes}
+        quiz_id = st.selectbox(
+            "Quiz", list(by_id), key="results_quiz",
+            format_func=lambda i: f"{by_id[i]['title']}  ·  {len(by_id[i]['questions'])} questions  ·  "
+                                  f"{when(by_id[i]['created_at'])}",
+        )
+        try:
+            book = api_get_cached(f"/quizzes/{quiz_id}/results")
+        except requests.RequestException as e:
+            st.error(f"Les résultats n'ont pas pu être chargés : {e}")
+            return
+
+        entries = book["entries"]
+        if entries:
+            s = book["summary"]
+            stats([
+                (s["students"], "étudiants"),
+                (pct(s["mean"]), "moyenne"),
+                (pct(s["median"]), "médiane"),
+                (f"{s['passed']}/{s['students']}", "au-dessus de 50 %"),
+                (s["retries"], "reprises"),
+            ])
+            st.write("")
+            st.dataframe(
+                [{"Étudiant": e["student_name"] or "—", "Identifiant": e["student_username"] or "—",
+                  "Tentative": e["attempt"], "Comptée": e["counted"],
+                  "Points": f"{num(e['total_score'])} / {num(e['max_score'])}",
+                  "Score": e["percentage"], "Remise le": when(e["submitted_at"])}
+                 for e in entries],
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100,
+                                                             format="%.1f %%"),
+                    "Comptée": st.column_config.CheckboxColumn(
+                        "Comptée", help="Première tentative : seule elle entre dans les statistiques."),
+                },
+            )
+        else:
+            empty_state("Aucune copie pour l'instant",
+                        "Les résultats apparaîtront dès qu'un étudiant aura remis ce quiz.")
+
+        download, refresh = st.columns(2)
+        with download:
+            if entries:
+                st.download_button("Télécharger le carnet (CSV)", data=gradebook_csv(book),
+                                   file_name=f"{book['title']} - résultats.csv", mime="text/csv",
+                                   key=f"csv_{quiz_id}", use_container_width=True)
+        with refresh:
+            # Les lectures sont gardées 60 s : sans ce bouton, une copie remise
+            # pendant le cours n'apparaîtrait qu'à l'expiration du cache.
+            if st.button("Actualiser", key="results_refresh", use_container_width=True):
+                invalidate_cache()
+                st.rerun()
+        if not entries:
+            return
+
+        st.write("")
+        questions = {q["id"]: q for q in by_id[quiz_id]["questions"]}
+        picked = st.selectbox(
+            "Copie détaillée", range(len(entries)), index=None, key=f"copy_{quiz_id}",
+            placeholder="Choisir une copie…",
+            format_func=lambda k: f"{entries[k]['student_name'] or entries[k]['student_username'] or '—'}"
+                                  f" — tentative {entries[k]['attempt']} — {pct(entries[k]['percentage'])}",
+        )
+        if picked is not None:
+            stack(result_row_html(g, "Réponse de l'étudiant",
+                                  answer_text(g["student_answer"], questions.get(g["question_id"])),
+                                  points=True)
+                  for g in entries[picked]["graded_answers"])
+
+    # --- 5. Carte sémantique ------------------------------------------------
     @st.fragment
     def map_tab():
         docs = api_get_cached("/documents")
@@ -1120,7 +1208,7 @@ def teacher_space():
                     )
 
     for tab, render in ((tab_upload, upload_tab), (tab_generate, generate_tab),
-                        (tab_manage, manage_tab), (tab_map, map_tab)):
+                        (tab_manage, manage_tab), (tab_results, results_tab), (tab_map, map_tab)):
         with tab:
             render()
 

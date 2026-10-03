@@ -41,7 +41,7 @@ class _Response:
             raise requests.HTTPError(f"{self.status_code} Server Error for url: {self.url}")
 
 
-def _fake_get(calls, quizzes=QUIZZES, fail=(), docs=(DOC,)):
+def _fake_get(calls, quizzes=QUIZZES, fail=(), docs=(DOC,), books=None):
     def get(url, **kwargs):
         path = urlsplit(url).path
         calls.append(path)
@@ -55,12 +55,22 @@ def _fake_get(calls, quizzes=QUIZZES, fail=(), docs=(DOC,)):
             return _Response(quizzes)
         if path == "/documents/d1/map":
             return _Response(MAP)
+        if path.startswith("/quizzes/") and path.endswith("/results"):
+            quiz_id = path.split("/")[2]
+            return _Response((books or {}).get(quiz_id) or _empty_book(quiz_id))
         if path.endswith("/export/pdf"):
             return _Response(content=b"%PDF-1.4 test")
         if path.endswith("/export/json"):
             return _Response(content=b"{}")
         raise AssertionError(f"appel inattendu : GET {url}")
     return get
+
+
+def _empty_book(quiz_id):
+    """Réponse du backend pour un quiz publié sans copie."""
+    return {"quiz_id": quiz_id, "title": f"Quiz {quiz_id}", "questions": [], "entries": [],
+            "summary": {"students": 0, "mean": None, "median": None, "min": None, "max": None,
+                        "passed": 0, "retries": 0}}
 
 
 NEW_QUIZ = {**QUIZZES[0], "id": "qn", "title": "Quiz généré"}
@@ -220,6 +230,81 @@ def test_review_cards_are_one_block_and_blank_lines_stay_inside_it():
     assert review[0].startswith('<div class="qb-stack"><article class="qb-q">')
     assert "\n" not in review[0]
     assert "Deuxième ligne 1<br><br>ligne 2 ?" in review[0]
+
+
+# --------------------------------------------------------------------------- #
+# Onglet Résultats : carnet de notes
+# --------------------------------------------------------------------------- #
+
+def _graded(answer, score):
+    return {"question_id": "qa-1", "question": "Question ?", "student_answer": answer, "correct": score == 1.0,
+            "score": score, "correct_answer": "B", "explanation": ""}
+
+
+BOOK = {
+    "quiz_id": "qa", "title": "Quiz qa", "questions": [{"id": "qa-1", "type": "qcm", "question": "Question ?"}],
+    "summary": {"students": 2, "mean": 50.0, "median": 50.0, "min": 0.0, "max": 100.0, "passed": 1, "retries": 1},
+    "entries": [
+        {"student_username": "lina", "student_name": "Lina", "attempt": 1, "counted": True,
+         "submitted_at": "2026-10-01T09:10:00Z", "total_score": 1.0, "max_score": 1.0, "percentage": 100.0,
+         "graded_answers": [_graded("1", 1.0)]},
+        {"student_username": "lina", "student_name": "Lina", "attempt": 2, "counted": False,
+         "submitted_at": "2026-10-01T09:20:00Z", "total_score": 0.0, "max_score": 1.0, "percentage": 0.0,
+         "graded_answers": [_graded("", 0.0)]},
+        {"student_username": "omar", "student_name": "Omar", "attempt": 1, "counted": True,
+         "submitted_at": "2026-10-01T09:30:00Z", "total_score": 0.0, "max_score": 1.0, "percentage": 0.0,
+         "graded_answers": [_graded("3", 0.0)]},
+    ],
+}
+PUBLISHED = [{**QUIZZES[0], "published": True}, QUIZZES[1]]
+
+
+def test_results_tab_waits_for_a_published_quiz_without_calling_the_api():
+    calls = []
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get(calls)):
+        at.run()
+    assert not at.exception
+    assert not [c for c in calls if c.endswith("/results")]
+    assert any("Aucun quiz publié" in m.value for m in at.markdown)
+
+
+def test_results_tab_shows_the_gradebook_and_a_readable_copy():
+    calls = []
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get(calls, quizzes=PUBLISHED, books={"qa": BOOK})):
+        at.run()
+        assert not at.exception
+        # Seul le quiz publié est proposé : une seule lecture du carnet.
+        assert [c for c in calls if c.endswith("/results")] == ["/quizzes/qa/results"]
+        tiles = next(m.value for m in at.markdown if "au-dessus de 50 %" in m.value)
+        for value in ('qb-stat__n">2<', 'qb-stat__n">50,0 %<', 'qb-stat__n">1/2<'):
+            assert value in tiles
+
+        table = at.dataframe[0].value
+        assert list(table["Étudiant"]) == ["Lina", "Lina", "Omar"]
+        assert list(table["Comptée"]) == [True, False, True]
+        assert list(table["Points"]) == ["1 / 1", "0 / 1", "0 / 1"]
+
+        at.selectbox(key="copy_qa").set_value(2)
+        at.run()
+    assert not at.exception
+    copy = next(m.value for m in at.markdown if 'class="qb-res' in m.value)
+    # Le QCM est enregistré par index ; l'enseignant lit le choix tel que l'étudiant l'a vu.
+    assert "D. D" in copy and "Réponse de l&#x27;étudiant" in copy and "0 / 1" in copy
+
+
+def test_refresh_rereads_the_gradebook_that_reruns_otherwise_keep_in_cache():
+    calls = []
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get(calls, quizzes=PUBLISHED, books={"qa": BOOK})):
+        at.run()
+        at.run()
+        assert calls.count("/quizzes/qa/results") == 1
+        next(b for b in at.button if b.key == "results_refresh").click()
+        at.run()
+    assert not at.exception
+    assert calls.count("/quizzes/qa/results") == 2
 
 
 # --------------------------------------------------------------------------- #
