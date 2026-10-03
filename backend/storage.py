@@ -100,6 +100,19 @@ def save_result(result: QuizResult) -> None:
     path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
 
 
+def number_attempts(results: list[dict]) -> list[dict]:
+    """Copies des résultats triées par date, avec leur rang de tentative recalculé
+    par étudiant et par quiz : les anciens fichiers n'ont pas de champ `attempt`,
+    et la date est la même référence que celle de first_attempts()."""
+    seen: dict[tuple, int] = {}
+    numbered = []
+    for result in sorted(results, key=_submitted_ts):
+        key = (result.get("quiz_id"), _student_key(result))
+        seen[key] = seen.get(key, 0) + 1
+        numbered.append({**result, "attempt": seen[key]})
+    return numbered
+
+
 def first_attempts(results: list[dict]) -> list[dict]:
     """La soumission la plus ancienne de chaque étudiant pour chaque quiz, seule
     comptée dans les statistiques agrégées. Fondé sur la date plutôt que sur

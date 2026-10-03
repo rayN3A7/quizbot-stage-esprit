@@ -278,6 +278,40 @@ def test_only_first_attempt_counts_in_the_map_overlay(client, sample_pdf):
     assert overlay()[0] == after_first[0] + len(questions)
 
 
+def test_gradebook_is_for_professors_and_lists_every_attempt(client, sample_pdf):
+    prof = _auth_headers(client, "prof_book", "professeur")
+    lina = _auth_headers(client, "lina_book", "etudiant", full_name="Lina")
+    with open(sample_pdf, "rb") as f:
+        doc = client.post("/documents/upload", headers=prof,
+                          files={"file": ("cours.pdf", f, "application/pdf")}).json()
+    quiz = client.post("/quizzes/generate", headers=prof, json={
+        "document_id": doc["id"], "num_questions": 4, "question_type": "mélange",
+    }).json()
+    client.post(f"/quizzes/{quiz['id']}/publish", headers=prof)
+
+    right = [{"question_id": q["id"],
+              "answer": str(q["correct_choice_index"]) if q["type"] == "qcm" else q["reference_answer"]}
+             for q in quiz["questions"]]
+    blank = [{"question_id": q["id"], "answer": ""} for q in quiz["questions"]]
+    for answers in (blank, right):
+        r = client.post(f"/quizzes/{quiz['id']}/submit", headers=lina,
+                        json={"quiz_id": quiz["id"], "answers": answers})
+        assert r.status_code == 200
+
+    # Les copies portent les noms des étudiants : réservées aux professeurs.
+    assert client.get(f"/quizzes/{quiz['id']}/results", headers=lina).status_code == 403
+    assert client.get(f"/quizzes/{quiz['id']}/results").status_code == 401
+    assert client.get("/quizzes/inconnu/results", headers=prof).status_code == 404
+
+    r = client.get(f"/quizzes/{quiz['id']}/results", headers=prof)
+    assert r.status_code == 200
+    book = r.json()
+    assert [(e["student_username"], e["student_name"], e["attempt"], e["counted"], e["percentage"])
+            for e in book["entries"]] == [("lina_book", "Lina", 1, True, 0.0), ("lina_book", "Lina", 2, False, 100.0)]
+    assert (book["summary"]["students"], book["summary"]["mean"], book["summary"]["retries"]) == (1, 0.0, 1)
+    assert len(book["entries"][1]["graded_answers"]) == len(quiz["questions"])
+
+
 def test_old_result_files_are_attached_through_their_quiz_excerpt(client, sample_pdf):
     """Résultats enregistrés avant GradedAnswer.source_excerpt : l'extrait est
     relu dans le quiz ; si le quiz a disparu, l'appariement d'origine reste."""
