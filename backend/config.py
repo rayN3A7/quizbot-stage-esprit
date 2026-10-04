@@ -96,6 +96,10 @@ class Settings:
     # confirmer par l'enseignant. Seuils calibrés sur scripts/grading_benchmark.json.
     OPEN_ANSWER_LOW: float = float(_env("OPEN_ANSWER_LOW", "0.45"))
     OPEN_ANSWER_HIGH: float = float(_env("OPEN_ANSWER_HIGH", "0.80"))
+    # Agent de correction (grading_agent.py) : tranche la zone d'incertitude
+    # avec le LLM configuré. Plafond d'appels par copie, pour la latence.
+    OPEN_ANSWER_AGENT: bool = _env("OPEN_ANSWER_AGENT", "true").lower() == "true"
+    OPEN_ANSWER_AGENT_MAX_CALLS: int = int(_env("OPEN_ANSWER_AGENT_MAX_CALLS", "6"))
 
     # --- Serveur ---
     API_HOST: str = _env("API_HOST", "0.0.0.0")

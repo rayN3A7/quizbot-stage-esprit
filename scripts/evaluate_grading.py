@@ -13,11 +13,16 @@ Mesures :
   - notes provisoires laissées à l'enseignant.
 
 Usage :
-    python scripts/evaluate_grading.py              # ancien barème vs actuel
+    python scripts/evaluate_grading.py              # ancien barème vs actuel, sans agent
     python scripts/evaluate_grading.py --sweep      # balaye les seuils bas / haut
     python scripts/evaluate_grading.py --details    # une ligne par réponse
+    python scripts/evaluate_grading.py --agent      # + agent de correction (LLM_PROVIDER)
 
-Utilise le vrai modèle d'embedding (pas de simulation) : premier lancement lent.
+Avec --agent, le modèle configuré (LLM_PROVIDER) juge chaque réponse une fois ;
+ses verdicts sont gardés, puis la vraie fonction grade_answer est rejouée avec
+eux pour chaque paire de seuils : le balayage tient compte de l'agent sans le
+rappeler. Le modèle d'embedding est le vrai (pas de simulation) : premier
+lancement lent.
 """
 from __future__ import annotations
 
@@ -25,7 +30,8 @@ import argparse
 import json
 import statistics
 import sys
-from collections import defaultdict
+import time
+from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path
 from unittest.mock import patch
@@ -36,6 +42,7 @@ sys.path.insert(0, str(ROOT))
 from backend import grading  # noqa: E402
 from backend.config import settings  # noqa: E402
 from backend.embeddings import cosine_similarity, embed_text  # noqa: E402
+from backend.grading_agent import OpenAnswerJudge  # noqa: E402
 from backend.models import Question, QuestionType  # noqa: E402
 
 OLD_THRESHOLD = 0.62
@@ -64,15 +71,37 @@ def _old(case):
     return ("juste" if s >= OLD_THRESHOLD else "faux"), round(s, 3), False
 
 
-def _current(case):
+def _current(case, judge=None):
     with patch.object(grading, "embed_text", _embed):
-        g = grading.grade_answer(case["question"], case["text"])
+        g = grading.grade_answer(case["question"], case["text"], judge)
     verdict = "juste" if g.correct else ("partiel" if g.score == 0.5 else "faux")
     return verdict, g.score, g.needs_review
 
 
-def _report(name, cases, grader):
-    rows = [(c, *grader(c)) for c in cases]
+def _agent_verdicts(cases):
+    """Un appel au modèle par réponse ; renvoie un juge qui rejoue ces verdicts."""
+    judge = OpenAnswerJudge(max_calls=10 ** 6)
+    verdicts, timings = {}, []
+    for c in cases:
+        started = time.perf_counter()
+        verdicts[(c["question"].question, c["text"].strip())] = judge(c["question"], c["text"].strip())
+        timings.append(time.perf_counter() - started)
+    decided = [(c, verdicts[(c["question"].question, c["text"].strip())]) for c in cases]
+    usable = [(c, d) for c, d in decided if d is not None]
+    print(f"\n== agent seul ({settings.LLM_PROVIDER}), sur les {len(cases)} réponses")
+    print(f"   verdicts exploitables : {len(usable)}/{len(cases)}")
+    print(f"   verdict exact         : {sum(1 for c, d in usable if d[0] == c['label'])}/{len(usable)}")
+    confusion = Counter((c["label"], d[0]) for c, d in usable)
+    print("   étiquette -> verdict : " + ", ".join(f"{a}->{b} {n}" for (a, b), n in sorted(confusion.items())))
+    print(f"   durée par appel       : médiane {statistics.median(timings):.1f} s, max {max(timings):.1f} s")
+
+    def replay(question, answer):
+        return verdicts.get((question.question, answer.strip()))
+    return replay
+
+
+def _report(name, cases, grader, judge=None):
+    rows = [(c, *(grader(c, judge) if judge else grader(c))) for c in cases]
     error = statistics.fmean(abs(points - c["expected"]) for c, _, points, _ in rows)
     false_right = sum(1 for c, v, _, _ in rows if c["label"] == "faux" and v == "juste")
     missed = sum(1 for c, v, _, _ in rows if c["label"] == "juste" and v == "faux")
@@ -93,10 +122,10 @@ def _report(name, cases, grader):
     return rows
 
 
-def _sweep(cases):
+def _sweep(cases, judge=None):
     """Seuils bas / haut : erreur moyenne et erreurs graves du barème à paliers
     (les règles — vide, énoncé recopié — s'appliquent avant les seuils)."""
-    print("\n== balayage des seuils (barème à paliers, sans agent)")
+    print(f"\n== balayage des seuils ({'avec' if judge else 'sans'} agent)")
     print("   bas   haut   erreur  faux->juste  juste->faux  à confirmer")
     results = []
     for low in [x / 100 for x in range(30, 61, 5)]:
@@ -104,7 +133,7 @@ def _sweep(cases):
             if high <= low:
                 continue
             with patch.object(settings, "OPEN_ANSWER_LOW", low), patch.object(settings, "OPEN_ANSWER_HIGH", high):
-                rows = [(c, *_current(c)) for c in cases]
+                rows = [(c, *_current(c, judge)) for c in cases]
             error = statistics.fmean(abs(p - c["expected"]) for c, _, p, _ in rows)
             fr = sum(1 for c, v, _, _ in rows if c["label"] == "faux" and v == "juste")
             mi = sum(1 for c, v, _, _ in rows if c["label"] == "juste" and v == "faux")
@@ -118,19 +147,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sweep", action="store_true")
     parser.add_argument("--details", action="store_true")
+    parser.add_argument("--agent", action="store_true")
     args = parser.parse_args()
 
     cases = list(_cases())
     print(f"{len(cases)} réponses, {len({c['qid'] for c in cases})} questions — "
           f"seuils actuels : bas {settings.OPEN_ANSWER_LOW}, haut {settings.OPEN_ANSWER_HIGH}")
     _report(f"ancien barème (points = similarité, juste dès {OLD_THRESHOLD})", cases, _old)
-    rows = _report("correction actuelle", cases, _current)
+    rows = _report("correction actuelle, sans agent", cases, _current)
+    judge = _agent_verdicts(cases) if args.agent else None
+    if judge:
+        rows = _report("correction actuelle, avec agent", cases, _current, judge)
     if args.details:
         print("\n   similarité  étiquette  verdict   points  réponse")
         for c, verdict, points, _ in rows:
             print(f"   {c['similarity']:.2f}        {c['label']:8s}   {verdict:8s}  {points:.1f}    {c['text'][:70]}")
     if args.sweep:
-        _sweep(cases)
+        _sweep(cases, judge)
 
 
 if __name__ == "__main__":

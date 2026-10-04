@@ -14,11 +14,15 @@ import json
 import logging
 import random
 import re
+import threading
 from abc import ABC, abstractmethod
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+# Plafond de tokens d'une correction de copie (verdict JSON + une phrase).
+GRADING_MAX_NEW_TOKENS = 160
 
 
 class LLMError(RuntimeError):
@@ -100,6 +104,10 @@ class LocalLLMProvider(BaseLLMProvider):
     _tokenizer = None
     _model = None
     _model_name = None
+    # Un seul appel à la fois sur le GPU : la correction des copies peut appeler
+    # le modèle depuis plusieurs requêtes simultanées (étudiants qui remettent
+    # en même temps), et deux générations parallèles se disputeraient la VRAM.
+    _lock = threading.Lock()
 
     def __init__(self):
         if LocalLLMProvider._model is None:
@@ -165,6 +173,10 @@ class LocalLLMProvider(BaseLLMProvider):
         milieu pour 10, ce qui produit un JSON tronqué et inexploitable. On lit
         donc NUM_QUESTIONS dans le prompt pour dimensionner le budget.
         """
+        if "MODE = CORRECTION" in user_prompt:
+            # Un verdict et une phrase : un petit plafond borne l'attente de
+            # l'étudiant si le modèle s'emballe au lieu de s'arrêter.
+            return GRADING_MAX_NEW_TOKENS
         match = re.search(r"NUM_QUESTIONS\s*=\s*(\d+)", user_prompt)
         n = int(match.group(1)) if match else 1
         return max(
@@ -184,7 +196,7 @@ class LocalLLMProvider(BaseLLMProvider):
         )
         inputs = self._tokenizer(prompt_text, return_tensors="pt").to(self._model.device)
 
-        with torch.no_grad():
+        with LocalLLMProvider._lock, torch.no_grad():
             output_ids = self._model.generate(
                 **inputs,
                 max_new_tokens=self._token_budget(user_prompt),
@@ -287,9 +299,36 @@ class MockProvider(BaseLLMProvider):
             ),
         }, ensure_ascii=False)
 
+    def _mock_grade(self, user_prompt: str) -> str:
+        """
+        Correction factice utilisée par grading_agent.py en mode LLM_PROVIDER=mock :
+        part des mots porteurs de la réponse attendue (ou du passage, à défaut)
+        que la copie reprend. Aucune compréhension réelle : sert à exercer la
+        boucle de correction sans clé API, avec un verdict qui dépend vraiment
+        de la copie.
+        """
+        copy = re.search(r"<<<COPIE>>>\s*(.*?)\s*<<<FIN_COPIE>>>", user_prompt, re.S)
+        reference = re.search(r"^Réponse attendue : (.+)$", user_prompt, re.M)
+        excerpt = re.search(r"^Passage du cours : (.+)$", user_prompt, re.M)
+        target = reference.group(1) if reference and not reference.group(1).startswith("(aucune") else (
+            excerpt.group(1) if excerpt else "")
+
+        def words(text: str) -> set[str]:
+            return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 3}
+
+        expected, given = words(target), words(copy.group(1) if copy else "")
+        share = len(expected & given) / len(expected) if expected else 0.0
+        verdict = "juste" if share >= 0.5 else ("partiel" if share >= 0.2 else "faux")
+        return json.dumps({
+            "verdict": verdict,
+            "justification": f"Correction factice : {round(100 * share)} % des mots attendus retrouvés (mode mock).",
+        }, ensure_ascii=False)
+
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         if "MODE = VERIFICATION" in user_prompt:
             return self._mock_verify(user_prompt)
+        if "MODE = CORRECTION" in user_prompt:
+            return self._mock_grade(user_prompt)
 
         match = re.search(r"NUM_QUESTIONS\s*=\s*(\d+)", user_prompt)
         n = int(match.group(1)) if match else 3
