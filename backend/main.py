@@ -17,7 +17,7 @@ Endpoints :
   POST /quizzes/{quiz_id}/publish -> [professeur] publie un quiz pour les étudiants
   GET  /quizzes                   -> [authentifié] liste des quiz
   POST /quizzes/{quiz_id}/submit  -> [étudiant] soumission des réponses + correction
-  GET  /quizzes/{quiz_id}/results -> [professeur] carnet de notes du quiz
+  GET  /quizzes/{quiz_id}/results -> [professeur] carnet de notes et analyse des questions
   GET  /quizzes/{quiz_id}/export/pdf   -> [professeur]
   GET  /quizzes/{quiz_id}/export/json  -> [professeur]
 """
@@ -285,7 +285,8 @@ def submit_answers(
 @app.get("/quizzes/{quiz_id}/results")
 def quiz_results(quiz_id: str, current_user: UserInDB = Depends(professor_only)):
     """Carnet de notes : toutes les copies remises, numérotées par tentative ; seule
-    la première tentative de chaque étudiant compte dans les statistiques."""
+    la première tentative de chaque étudiant compte dans les statistiques et dans
+    l'analyse des questions (voir analytics.py)."""
     quiz = storage.get_quiz(quiz_id)
     if quiz is None:
         raise HTTPException(404, "Quiz introuvable.")
