@@ -171,6 +171,7 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 }
 .qb-tag--crimson { background:var(--qb-crimson-soft); color:var(--qb-crimson); border-color:rgba(255,51,80,.3); }
 .qb-tag--valid   { background:var(--qb-valid-soft);   color:var(--qb-valid);   border-color:rgba(46,230,160,.3); }
+.qb-tag--azure   { background:var(--qb-azure-soft);   color:var(--qb-azure);   border-color:rgba(127,180,255,.3); }
 
 /* ---------- signature : la carte question en volume ---------- */
 .qb-q {
@@ -249,6 +250,11 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 .qb-res::before { content:''; position:absolute; left:0; top:0; bottom:0; width:2px; }
 .qb-res--ok::before { background:linear-gradient(180deg,var(--qb-valid),transparent); }
 .qb-res--ko::before { background:linear-gradient(180deg,var(--qb-crimson),transparent); }
+.qb-res--mid::before { background:linear-gradient(180deg,var(--qb-azure),transparent); }
+.qb-res__tags { display:flex; flex-wrap:wrap; gap:6px; margin:-2px 0 8px; }
+.qb-res__fb { font-size:13.2px; line-height:1.55; color:var(--qb-text); margin:-3px 0 10px;
+  padding-left:10px; border-left:2px solid var(--qb-line-hi); }
+.qb-res__meta { font-family:var(--qb-mono); font-size:10.5px; color:var(--qb-faint); margin:-4px 0 9px; }
 .qb-res__q { font-size:14.5px; font-weight:500; margin:0 0 10px; line-height:1.5; color:#fff; }
 .qb-res__l { font-family:var(--qb-mono); font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--qb-faint); }
 .qb-res__v { font-size:13.8px; margin:3px 0 9px; line-height:1.55; color:var(--qb-dim); }
@@ -683,21 +689,45 @@ def loader_html(label: str, hint: str = "") -> str:
 
 
 def result_row_html(g: dict, answer_label: str = "Votre réponse", answer: str | None = None,
-                    points: bool = False) -> str:
-    ok = bool(g["correct"])
+                    teacher: bool = False) -> str:
+    """Une question corrigée. Les questions ouvertes notées par paliers (graded_by
+    renseigné) montrent leurs points et la raison de la note ; l'enseignant voit
+    en plus qui l'a décidée et la similarité."""
+    score = float(g.get("score", 0.0))
+    graded_by = g.get("graded_by", "")
+    # Avant les paliers, le score d'une réponse ouverte était une similarité (0,41…) :
+    # un ancien résultat reste juste ou faux, jamais « partiel ».
+    state = "ok" if g["correct"] else ("mid" if graded_by and score > 0 else "ko")
     shown = str(g["student_answer"]) if answer is None else answer
+    tags = ('<div class="qb-res__tags"><span class="qb-tag qb-tag--azure">note provisoire</span></div>'
+            if g.get("needs_review") else "")
+    meta = ""
+    if teacher and graded_by:
+        how = {"agent": "corrigée par l'agent", "similarité": "corrigée à la similarité",
+               "règle": "corrigée par une règle"}.get(graded_by, f"corrigée par : {graded_by}")
+        sim = g.get("similarity")
+        if sim is not None:
+            how += f" ({num(sim)})" if graded_by == "similarité" else f" (similarité {num(sim)})"
+        meta = f'<div class="qb-res__meta">{_txt(how)}</div>'
     return (
-        f'<div class="qb-res qb-res--{"ok" if ok else "ko"}">'
-        f'<p class="qb-res__q">{_txt(g["question"])}</p>'
+        f'<div class="qb-res qb-res--{state}">'
+        f'<p class="qb-res__q">{_txt(g["question"])}</p>{tags}'
         f'<div class="qb-res__l">{esc(answer_label)}</div>'
         f'<div class="qb-res__v">{_txt(shown or "— (vide)")}</div>'
-        f'<div class="qb-res__l">Réponse attendue</div>'
-        f'<div class="qb-res__v">{_txt(g["correct_answer"])}</div>'
-        + (f'<div class="qb-res__l">Points</div><div class="qb-res__v">{num(g["score"])} / 1</div>'
-           if points else "")
+        + (f'<div class="qb-res__fb">{_txt(g["feedback"])}</div>' if g.get("feedback") else "")
+        + f'<div class="qb-res__l">Réponse attendue</div>'
+        f'<div class="qb-res__v">{_txt(g["correct_answer"]) or "— (aucune enregistrée)"}</div>'
+        + (f'<div class="qb-res__l">Points</div><div class="qb-res__v">{num(score)} / 1</div>'
+           if teacher or graded_by else "")
+        + meta
         + (f'<div class="qb-q__note">{_txt(g["explanation"])}</div>' if g.get("explanation") else "")
         + '</div>'
     )
+
+
+def _to_review(entry: dict) -> int:
+    """Réponses à note provisoire d'une copie (absent des anciens résultats : 0)."""
+    return sum(1 for g in entry["graded_answers"] if g.get("needs_review"))
 
 
 def item_card_html(item: dict) -> str:
@@ -1179,18 +1209,25 @@ def teacher_space():
                 (s["retries"], "reprises"),
             ])
             st.write("")
+            # Ce qu'on lit d'abord à gauche : sur un écran étroit, la grille défile
+            # horizontalement et les dernières colonnes sont masquées.
             st.dataframe(
-                [{"Étudiant": e["student_name"] or "—", "Identifiant": e["student_username"] or "—",
-                  "Tentative": e["attempt"], "Comptée": e["counted"],
+                [{"Étudiant": e["student_name"] or "—", "Score": e["percentage"],
                   "Points": f"{num(e['total_score'])} / {num(e['max_score'])}",
-                  "Score": e["percentage"], "Remise le": when(e["submitted_at"])}
+                  "À vérifier": _to_review(e), "Comptée": e["counted"], "Tentative": e["attempt"],
+                  "Identifiant": e["student_username"] or "—", "Remise le": when(e["submitted_at"])}
                  for e in entries],
                 hide_index=True, use_container_width=True,
                 column_config={
+                    # Entier : le format de la colonne n'écrit pas la virgule décimale
+                    # (« 37.4 % ») ; la valeur exacte est dans les tuiles et le CSV.
                     "Score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100,
-                                                             format="%.1f %%"),
+                                                             format="%.0f %%"),
                     "Comptée": st.column_config.CheckboxColumn(
                         "Comptée", help="Première tentative : seule elle entre dans les statistiques."),
+                    "À vérifier": st.column_config.NumberColumn(
+                        "À vérifier", help="Réponses ouvertes à note provisoire : à confirmer "
+                                           "en ouvrant la copie détaillée ci-dessous."),
                 },
             )
         else:
@@ -1218,12 +1255,13 @@ def teacher_space():
             "Copie détaillée", range(len(entries)), index=None, key=f"copy_{quiz_id}",
             placeholder="Choisir une copie…",
             format_func=lambda k: f"{entries[k]['student_name'] or entries[k]['student_username'] or '—'}"
-                                  f" — tentative {entries[k]['attempt']} — {pct(entries[k]['percentage'])}",
+                                  f" — tentative {entries[k]['attempt']} — {pct(entries[k]['percentage'])}"
+                                  + (f" — {_to_review(entries[k])} à vérifier" if _to_review(entries[k]) else ""),
         )
         if picked is not None:
             stack(result_row_html(g, "Réponse de l'étudiant",
                                   answer_text(g["student_answer"], questions.get(g["question_id"])),
-                                  points=True)
+                                  teacher=True)
                   for g in entries[picked]["graded_answers"])
 
         analysis = book.get("analysis")
@@ -1358,11 +1396,22 @@ def student_space():
             "quiz_id": quiz_id,
             "answers": [{"question_id": qid, "answer": ans} for qid, ans in answers.items()],
         }
+        # Les réponses ouvertes incertaines sont relues par le modèle : avec le
+        # modèle local, quelques secondes chacune.
+        has_open = any(q["type"] != "qcm" for q in quiz["questions"])
+        loader = st.empty()
+        loader.markdown(loader_html(
+            "Correction de votre copie…",
+            "Les réponses ouvertes peuvent être relues par le modèle : quelques secondes chacune."
+            if has_open and health["llm_provider"] == "local" else "",
+        ), unsafe_allow_html=True)
         try:
             result = api_post(f"/quizzes/{quiz_id}/submit", json=submission)
         except Exception as e:
+            loader.empty()
             st.error(f"La remise a échoué : {e}")
             return
+        loader.empty()
 
         st.write("")
         section("Correction", "Votre résultat")

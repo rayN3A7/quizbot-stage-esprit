@@ -341,6 +341,29 @@ def test_question_analysis_is_one_block_of_cards_with_bars_and_flags():
     assert any("Avec 2 copies, ces chiffres sont indicatifs" in m.value for m in at.markdown)
 
 
+def test_provisional_grades_are_counted_and_the_copy_says_who_graded_it():
+    provisional = {"question_id": "qa-2", "question": "Expliquez.", "student_answer": "Les poids changent",
+                   "correct": False, "score": 0.5, "correct_answer": "Réponse", "explanation": "",
+                   "feedback": "Note provisoire.", "graded_by": "similarité", "similarity": 0.58,
+                   "needs_review": True}
+    agent = {**provisional, "question_id": "qa-3", "score": 1.0, "correct": True, "graded_by": "agent",
+             "needs_review": False, "similarity": 0.61}
+    entries = [dict(BOOK["entries"][0], graded_answers=[provisional, agent])] + BOOK["entries"][1:]
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get([], quizzes=PUBLISHED,
+                                                     books={"qa": {**BOOK, "entries": entries}})):
+        at.run()
+        assert list(at.dataframe[0].value["À vérifier"]) == [1, 0, 0]
+        picker = at.selectbox(key="copy_qa")
+        assert picker.options[0].endswith("— 1 à vérifier") and "à vérifier" not in picker.options[1]
+        picker.set_value(0)
+        at.run()
+    assert not at.exception
+    copy = next(m.value for m in at.markdown if 'class="qb-res' in m.value)
+    assert "corrigée à la similarité (0,58)" in copy
+    assert "corrigée par l&#x27;agent (similarité 0,61)" in copy
+
+
 def test_refresh_rereads_the_gradebook_that_reruns_otherwise_keep_in_cache():
     calls = []
     at = _teacher_app()
