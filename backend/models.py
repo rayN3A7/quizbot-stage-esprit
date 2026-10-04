@@ -145,6 +145,14 @@ class GradedAnswer(BaseModel):
     # Extrait du cours dont la question est tirée : la carte sémantique s'en sert
     # pour rattacher la réponse au bon passage. Absent des anciens résultats.
     source_excerpt: str = ""
+    # Questions ouvertes (absents des anciens résultats) : pourquoi cette note,
+    # en une phrase destinée à l'étudiant ; qui l'a décidée (« règle »,
+    # « similarité », « agent ») ; la similarité avec la réponse attendue ; et
+    # si l'enseignant doit la confirmer (note provisoire).
+    feedback: str = ""
+    graded_by: str = ""
+    similarity: Optional[float] = None
+    needs_review: bool = False
 
 
 class QuizResult(BaseModel):

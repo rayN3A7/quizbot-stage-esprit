@@ -89,10 +89,13 @@ class Settings:
     # --- Retrieval ---
     TOP_K_CHUNKS: int = int(_env("TOP_K_CHUNKS", "6"))
 
-    # --- Seuil de similarité pour la correction des questions ouvertes ---
-    OPEN_ANSWER_SIMILARITY_THRESHOLD: float = float(
-        _env("OPEN_ANSWER_SIMILARITY_THRESHOLD", "0.62")
-    )
+    # --- Correction des questions ouvertes ---
+    # Similarité cosinus entre la réponse et la réponse attendue. Sous le seuil
+    # bas, la réponse est fausse ; au-dessus du seuil haut, juste ; entre les
+    # deux, la similarité ne suffit pas à trancher : note provisoire de 0,5, à
+    # confirmer par l'enseignant. Seuils calibrés sur scripts/grading_benchmark.json.
+    OPEN_ANSWER_LOW: float = float(_env("OPEN_ANSWER_LOW", "0.45"))
+    OPEN_ANSWER_HIGH: float = float(_env("OPEN_ANSWER_HIGH", "0.80"))
 
     # --- Serveur ---
     API_HOST: str = _env("API_HOST", "0.0.0.0")

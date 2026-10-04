@@ -1,14 +1,25 @@
 """
 Module de correction : compare les réponses de l'étudiant aux réponses de
-référence. Les QCM sont corrigés par comparaison d'index ; les questions
-ouvertes par similarité sémantique des embeddings (limite documentée dans
-le cahier des charges, section 9 : la comparaison sémantique peut ne pas
-capturer toutes les nuances des réponses).
+référence. Les QCM sont corrigés par comparaison d'index.
+
+Questions ouvertes : barème à trois paliers, comme un correcteur humain —
+juste (1 point), partiel (0,5), faux (0). La similarité sémantique avec la
+réponse attendue ne tranche que les cas nets (limite documentée dans le cahier
+des charges, section 9 : elle ne capture pas toutes les nuances) :
+- réponse vide, ou qui n'ajoute rien à l'énoncé : faux, sans calcul ;
+- question sans réponse attendue (défaut de génération) : rien à comparer,
+  note provisoire à confirmer par l'enseignant ;
+- similarité sous OPEN_ANSWER_LOW : faux ; au-dessus de OPEN_ANSWER_HIGH : juste ;
+- entre les deux : partiel provisoire, à confirmer.
+Auparavant le score valait la similarité elle-même : « je ne sais pas » ou une
+phrase hors sujet rapportaient de 0,1 à 0,4 point par question.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .config import settings
 from .embeddings import cosine_similarity, embed_text
@@ -49,24 +60,83 @@ def _grade_mcq(question: Question, student_answer: str) -> GradedAnswer:
     )
 
 
-def _grade_open(question: Question, student_answer: str) -> GradedAnswer:
-    if not student_answer.strip():
-        similarity = 0.0
-    else:
-        student_vec = embed_text(student_answer)
-        reference_vec = embed_text(question.reference_answer)
-        similarity = max(cosine_similarity(student_vec, reference_vec), 0.0)
+POINTS = {"juste": 1.0, "partiel": 0.5, "faux": 0.0}
 
-    is_correct = similarity >= settings.OPEN_ANSWER_SIMILARITY_THRESHOLD
+# Mots-outils : ils ne portent pas, à eux seuls, une réponse.
+_STOPWORDS = frozenset("""
+les des une aux ces cet cette avec comme comment dans donc dont car elle elles est etre ete ont ils
+leur leurs lui mais meme mes moi mon nos notre nous par pas pour quand que quel quelle quelles quels
+qui quoi sans ses son sont sur tes toi ton vos votre vous cela ceci celle celui ceux alors ainsi
+aussi entre chaque tres plus moins peu bien tout tous
+""".split())
+
+
+def _words(text: str) -> list[str]:
+    folded = unicodedata.normalize("NFKD", text.lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.findall(r"[a-z0-9]+", folded)
+
+
+def _content_words(words: list[str]) -> set[str]:
+    return {w for w in words if (len(w) >= 3 or w.isdigit()) and w not in _STOPWORDS}
+
+
+def adds_nothing(answer: str, question: Question) -> bool:
+    """Aucun mot porteur de sens de la réponse n'est absent de l'énoncé : recopier
+    la question n'y répond pas. Exception : un énoncé qui CITE sa propre réponse
+    (« Expliquez l'idée suivante : « … » », questions du générateur factice) ;
+    la citation est retirée de l'énoncé, et la reprendre reste une réponse."""
+    stem = f" {' '.join(_words(question.question))} "
+    quoted = " ".join(_words(question.reference_answer))
+    if quoted and f" {quoted} " in stem:
+        stem = stem.replace(f" {quoted} ", " ")
+    return not (_content_words(_words(answer)) - _content_words(stem.split()))
+
+
+def _graded_open(question: Question, student_answer: str, verdict: str, graded_by: str,
+                 feedback: str, similarity: Optional[float] = None,
+                 needs_review: bool = False) -> GradedAnswer:
     return GradedAnswer(
         question_id=question.id,
         question=question.question,
         student_answer=student_answer,
-        correct=is_correct,
-        score=round(similarity, 3),
+        correct=verdict == "juste",
+        score=POINTS[verdict],
         correct_answer=question.reference_answer,
         explanation=question.explanation,
         source_excerpt=question.source_excerpt,
+        feedback=feedback,
+        graded_by=graded_by,
+        similarity=None if similarity is None else round(similarity, 3),
+        needs_review=needs_review,
+    )
+
+
+def _grade_open(question: Question, student_answer: str) -> GradedAnswer:
+    answer = student_answer.strip()
+    if not answer:
+        return _graded_open(question, student_answer, "faux", "règle", "Pas de réponse.")
+    if not question.reference_answer.strip():
+        return _graded_open(
+            question, student_answer, "faux", "règle",
+            "Cette question n'a pas de réponse attendue enregistrée : votre réponse "
+            "sera corrigée par l'enseignant.", needs_review=True,
+        )
+    if adds_nothing(answer, question):
+        return _graded_open(question, student_answer, "faux", "règle",
+                            "La réponse reprend l'énoncé sans rien y ajouter.")
+
+    similarity = max(cosine_similarity(embed_text(answer), embed_text(question.reference_answer)), 0.0)
+    if similarity >= settings.OPEN_ANSWER_HIGH:
+        return _graded_open(question, student_answer, "juste", "similarité",
+                            "Votre réponse rejoint la réponse attendue.", similarity)
+    if similarity < settings.OPEN_ANSWER_LOW:
+        return _graded_open(question, student_answer, "faux", "similarité",
+                            "Votre réponse s'éloigne trop de la réponse attendue.", similarity)
+    return _graded_open(
+        question, student_answer, "partiel", "similarité",
+        "Votre réponse rejoint en partie la réponse attendue : note provisoire, "
+        "à confirmer par l'enseignant.", similarity, needs_review=True,
     )
 
 
