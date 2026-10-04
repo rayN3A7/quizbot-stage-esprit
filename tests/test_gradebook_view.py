@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "frontend"))
-from gradebook_view import answer_text, gradebook_csv, num, pct, when  # noqa: E402
+from gradebook_view import (  # noqa: E402
+    answer_text, gradebook_csv, index, num, pct, rate, reliability_label, when,
+)
 
 MCQ = {"id": "q1", "type": "qcm", "question": "Q1 ?", "choices": ["Vrai", "Faux", "Peut-être"]}
 OPEN = {"id": "q2", "type": "ouverte", "question": "Q2 ?"}
@@ -16,6 +18,13 @@ OPEN = {"id": "q2", "type": "ouverte", "question": "Q2 ?"}
 def test_numbers_and_percentages_are_written_the_french_way():
     assert [num(0.413), num(4.0), num(28.6), num(0.0)] == ["0,413", "4", "28,6", "0"]
     assert [pct(57.14), pct(100.0), pct(None)] == ["57,1 %", "100,0 %", "—"]
+    assert [rate(0.6364), rate(1.0), rate(None)] == ["64 %", "100 %", "—"]
+    assert [index(0.32), index(-0.4), index(None)] == ["0,32", "−0,40", "—"]
+
+
+def test_reliability_uses_the_usual_cronbach_thresholds():
+    assert [reliability_label(a) for a in (0.85, 0.8, 0.72, 0.69, None)] == \
+        ["bonne", "bonne", "acceptable", "faible", "non calculée"]
 
 
 def test_mcq_answers_show_the_choice_the_student_saw():

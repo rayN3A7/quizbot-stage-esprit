@@ -31,7 +31,9 @@ import streamlit.components.v1 as components
 # `streamlit run frontend/app.py` place déjà frontend/ sur sys.path, mais on
 # sécurise le cas où l'app est lancée depuis un autre répertoire de travail.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gradebook_view import answer_text, gradebook_csv, num, pct, when  # noqa: E402
+from gradebook_view import (  # noqa: E402
+    answer_text, gradebook_csv, index, num, pct, rate, reliability_label, when,
+)
 from hero import HERO_HEIGHT, HERO_HTML  # noqa: E402
 from semantic_map_view import MAP_HEIGHT, build_map_html  # noqa: E402
 
@@ -143,7 +145,7 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 .qb-section__sub { color:var(--qb-dim); font-size:14px; margin:8px 0 0; max-width:64ch; line-height:1.6; }
 
 /* ---------- surfaces vitrées ---------- */
-.qb-card, .qb-stat, .qb-row, .qb-q, .qb-res, .qb-agent, .qb-empty {
+.qb-card, .qb-stat, .qb-row, .qb-q, .qb-res, .qb-item, .qb-agent, .qb-empty {
   background:linear-gradient(155deg, var(--qb-raised), var(--qb-surface));
   border:1px solid var(--qb-line); box-shadow:var(--qb-glow);
   backdrop-filter:blur(6px);
@@ -251,6 +253,31 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 .qb-res__l { font-family:var(--qb-mono); font-size:9.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--qb-faint); }
 .qb-res__v { font-size:13.8px; margin:3px 0 9px; line-height:1.55; color:var(--qb-dim); }
 
+/* ---------- analyse des questions ----------
+   Liseré : cramoisi s'il y a une alerte, azur pour une simple remarque, aucun
+   sinon (une question sans signalement n'est pas « bonne » : il manque peut-être
+   seulement des copies). */
+.qb-item { border-radius:13px; padding:15px 18px; margin-bottom:10px; position:relative; overflow:clip; }
+.qb-item::before { content:''; position:absolute; left:0; top:0; bottom:0; width:2px; }
+.qb-item--alerte::before { background:linear-gradient(180deg,var(--qb-crimson),transparent); }
+.qb-item--info::before { background:linear-gradient(180deg,var(--qb-azure),transparent); }
+.qb-item__head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.qb-item__n { font-family:var(--qb-mono); font-size:12px; letter-spacing:.08em; color:var(--qb-crimson); }
+.qb-item__meta { font-family:var(--qb-mono); font-size:11px; color:var(--qb-faint); }
+.qb-item__q { font-size:14.5px; font-weight:500; margin:9px 0 10px; line-height:1.5; color:#fff; }
+.qb-item__fig { display:flex; flex-wrap:wrap; gap:6px 20px; font-family:var(--qb-mono); font-size:11.5px; color:var(--qb-faint); }
+.qb-item__fig b { margin-left:5px; font-weight:500; color:var(--qb-text); }
+.qb-bars { display:grid; grid-template-columns:minmax(0,1fr) minmax(70px,150px) 2.2em; gap:7px 12px;
+  align-items:center; margin-top:12px; }
+.qb-bars__l { font-size:13px; color:var(--qb-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qb-bar { height:6px; border-radius:3px; background:var(--qb-line); overflow:clip; }
+.qb-bar i { display:block; height:100%; border-radius:3px; background:rgba(127,180,255,.5); }
+.qb-bar--key i { background:var(--qb-valid); }
+.qb-bars__c { font-family:var(--qb-mono); font-size:11.5px; text-align:right; color:var(--qb-text); }
+.qb-flag { margin-top:10px; padding:8px 12px; border-radius:10px; font-size:13px; line-height:1.5; }
+.qb-flag--alerte { background:var(--qb-crimson-soft); border:1px solid rgba(255,51,80,.3); color:var(--qb-text); }
+.qb-flag--info { background:var(--qb-azure-soft); border:1px solid rgba(127,180,255,.2); color:var(--qb-dim); }
+
 /* ---------- lignes & vides ---------- */
 .qb-row { display:flex; align-items:center; gap:15px; border-radius:13px; padding:14px 17px; margin-bottom:9px;
   overflow:clip; transform-origin:0% 50%; transition:box-shadow .3s ease, border-color .25s ease; }
@@ -291,7 +318,7 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
 @keyframes qb-focus  { from{scale:.965;filter:blur(5px)} to{scale:1;filter:none} }
 @media (prefers-reduced-motion: no-preference) {
   /* Repli (sans animation-timeline) : montée à l'affichage. */
-  .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
+  .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-item,.qb-empty,.qb-agent {
     animation:qb-rise .55s cubic-bezier(.16,1,.3,1) both;
     animation-delay:calc(var(--i, 0) * 70ms);
   }
@@ -299,7 +326,7 @@ h1,h2,h3,h4 { font-family: var(--qb-display); color: var(--qb-text); letter-spac
      l'affichage pour ce qui est déjà à l'écran : deux jeux de propriétés
      distincts, donc aucun conflit entre les deux animations. */
   @supports (animation-timeline: view()) {
-    .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-empty,.qb-agent {
+    .qb-section,.qb-card,.qb-row,.qb-stat,.qb-q,.qb-res,.qb-item,.qb-empty,.qb-agent {
       animation:qb-focus .7s cubic-bezier(.16,1,.3,1) both, qb-reveal linear both;
       animation-delay:calc(var(--i, 0) * 70ms), 0s;
       animation-timeline:auto, view();
@@ -670,6 +697,42 @@ def result_row_html(g: dict, answer_label: str = "Votre réponse", answer: str |
            if points else "")
         + (f'<div class="qb-q__note">{_txt(g["explanation"])}</div>' if g.get("explanation") else "")
         + '</div>'
+    )
+
+
+def item_card_html(item: dict) -> str:
+    """Analyse d'une question : chiffres, répartition des choix d'un QCM, signalements."""
+    levels = {f["level"] for f in item["flags"]}
+    tone = "alerte" if "alerte" in levels else ("info" if levels else "calme")
+    n = item["n"]
+    meta = f"{n} copie{'s' if n > 1 else ''}" + (f" · {item['blank']} sans réponse" if item["blank"] else "")
+
+    figures = [("Réussite", rate(item["success_rate"]))]
+    if item["type"] == "ouverte" and item["mean_score"] is not None:
+        figures.append(("Points moyens", num(item["mean_score"])))
+    figures.append(("Discrimination", index(item["discrimination"])))
+    figures_html = "".join(f"<span>{_txt(label)}<b>{_txt(value)}</b></span>" for label, value in figures)
+
+    bars = ""
+    if item.get("choices") and n:
+        rows = "".join(
+            f'<span class="qb-bars__l">{_txt(o["letter"] + ". " + o["text"])}</span>'
+            f'<span class="qb-bar{" qb-bar--key" if o["correct"] else ""}">'
+            f'<i style="width:{100 * o["count"] / n:.0f}%"></i></span>'
+            f'<span class="qb-bars__c">{o["count"]}</span>'
+            for o in item["choices"]["options"]
+        )
+        bars = f'<div class="qb-bars">{rows}</div>'
+    flags = "".join(f'<div class="qb-flag qb-flag--{esc(f["level"])}">{_txt(f["text"])}</div>'
+                    for f in item["flags"])
+
+    return (
+        f'<article class="qb-item qb-item--{tone}"><div class="qb-item__head">'
+        f'<span class="qb-item__n">Q{item["number"]:02d}</span>'
+        f'<span class="qb-tag">{_txt(item["type"])}</span>'
+        f'<span class="qb-item__meta">{_txt(meta)}</span></div>'
+        f'<p class="qb-item__q">{_txt(item["question"])}</p>'
+        f'<div class="qb-item__fig">{figures_html}</div>{bars}{flags}</article>'
     )
 
 
@@ -1162,6 +1225,31 @@ def teacher_space():
                                   answer_text(g["student_answer"], questions.get(g["question_id"])),
                                   points=True)
                   for g in entries[picked]["graded_answers"])
+
+        analysis = book.get("analysis")
+        if not analysis or not analysis["items"]:
+            return
+        st.write("")
+        copies, minimum = analysis["students"], analysis["min_students"]
+        sub = ("Réussite : part des copies justes. Discrimination, de −1 à 1 : la question est-elle "
+               "mieux réussie par les élèves qui réussissent le reste du quiz ? Sous 0,20 elle les "
+               "distingue mal ; négative, sa réponse attendue ou son énoncé sont suspects.")
+        if copies < minimum:
+            sub += (f" Avec {copies} copie{'s' if copies > 1 else ''}, ces chiffres sont indicatifs : "
+                    f"aucun signalement statistique avant {minimum} copies.")
+        section("Analyse", "Analyse des questions", sub)
+
+        items = analysis["items"]
+        alerts = sum(any(f["level"] == "alerte" for f in i["flags"]) for i in items)
+        remarks = sum(bool(i["flags"]) for i in items) - alerts
+        alpha = analysis["reliability"]
+        stats([
+            (alerts, "à revoir"),
+            (remarks, "à surveiller"),
+            (index(alpha), f"fidélité · {reliability_label(alpha)}"),
+        ])
+        st.write("")
+        stack(item_card_html(i) for i in items)
 
     # --- 5. Carte sémantique ------------------------------------------------
     @st.fragment

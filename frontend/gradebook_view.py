@@ -20,6 +20,23 @@ def pct(value) -> str:
     return "—" if value is None else f"{value:.1f}".replace(".", ",") + " %"
 
 
+def rate(value) -> str:
+    """Taux entre 0 et 1, en pourcentage entier : 0,6364 -> « 64 % »."""
+    return "—" if value is None else f"{100 * value:.0f} %"
+
+
+def index(value) -> str:
+    """Indice entre -1 et 1 (discrimination, fidélité), deux décimales."""
+    return "—" if value is None else f"{value:.2f}".replace(".", ",").replace("-", "−")
+
+
+def reliability_label(alpha) -> str:
+    """Seuils usuels de l'alpha de Cronbach."""
+    if alpha is None:
+        return "non calculée"
+    return "bonne" if alpha >= 0.8 else ("acceptable" if alpha >= 0.7 else "faible")
+
+
 def when(value) -> str:
     """Date de remise, stockée en UTC, affichée à l'heure de cette machine."""
     try:

@@ -70,7 +70,8 @@ def _empty_book(quiz_id):
     """Réponse du backend pour un quiz publié sans copie."""
     return {"quiz_id": quiz_id, "title": f"Quiz {quiz_id}", "questions": [], "entries": [],
             "summary": {"students": 0, "mean": None, "median": None, "min": None, "max": None,
-                        "passed": 0, "retries": 0}}
+                        "passed": 0, "retries": 0},
+            "analysis": {"min_students": 5, "students": 0, "reliability": None, "items": []}}
 
 
 NEW_QUIZ = {**QUIZZES[0], "id": "qn", "title": "Quiz généré"}
@@ -292,6 +293,52 @@ def test_results_tab_shows_the_gradebook_and_a_readable_copy():
     copy = next(m.value for m in at.markdown if 'class="qb-res' in m.value)
     # Le QCM est enregistré par index ; l'enseignant lit le choix tel que l'étudiant l'a vu.
     assert "D. D" in copy and "Réponse de l&#x27;étudiant" in copy and "0 / 1" in copy
+
+
+def _option(letter, count, correct=False):
+    return {"letter": letter, "text": f"Choix {letter}", "count": count, "correct": correct}
+
+
+# Deux premières tentatives (Lina, Omar) : sous le minimum de 5 copies, seul le
+# défaut de la question elle-même est signalé — comme le fait le backend.
+ANALYSIS = {"min_students": 5, "students": 2, "reliability": None, "items": [
+    {"question_id": "qa-1", "number": 1, "type": "qcm", "question": "Vrai ou faux : 2 < 3 ?", "n": 2,
+     "blank": 0, "success_rate": 0.5, "mean_score": 0.5, "discrimination": None,
+     "choices": {"options": [_option("A", 0), _option("B", 1, True), _option("C", 0), _option("D", 1)],
+                 "other": 0},
+     "flags": []},
+    {"question_id": "qa-2", "number": 2, "type": "ouverte", "question": "Expliquez.", "n": 2, "blank": 1,
+     "success_rate": 0.0, "mean_score": 0.465, "discrimination": None, "choices": None,
+     "flags": [{"level": "alerte", "code": "no_reference_answer",
+                "text": "Aucune réponse attendue n'est enregistrée : la correction automatique "
+                        "de cette question n'a pas de sens."}]},
+]}
+
+
+def test_question_analysis_is_one_block_of_cards_with_bars_and_flags():
+    at = _teacher_app()
+    with patch("requests.get", side_effect=_fake_get([], quizzes=PUBLISHED,
+                                                     books={"qa": {**BOOK, "analysis": ANALYSIS}})):
+        at.run()
+    assert not at.exception
+
+    cards = [m.value for m in at.markdown if 'class="qb-item' in m.value]
+    assert len(cards) == 1 and cards[0].count("<article") == 2
+    assert cards[0].startswith('<div class="qb-stack"><article class="qb-item qb-item--calme">')
+    assert "Vrai ou faux : 2 &lt; 3 ?" in cards[0]
+    # Barres proportionnelles aux copies ; la bonne réponse a sa propre couleur.
+    assert '<span class="qb-bar qb-bar--key"><i style="width:50%"></i></span>' in cards[0]
+    assert cards[0].count('<span class="qb-bar"><i style="width:0%"></i></span>') == 2
+    assert '<article class="qb-item qb-item--alerte">' in cards[0]
+    assert '<div class="qb-flag qb-flag--alerte">Aucune réponse attendue' in cards[0]
+    assert "1 sans réponse" in cards[0] and "Points moyens<b>0,465</b>" in cards[0]
+
+    tiles = next(m.value for m in at.markdown if "à surveiller" in m.value)
+    for value in ('qb-stat__n">1</div><div class="qb-stat__l">à revoir',
+                  'qb-stat__n">0</div><div class="qb-stat__l">à surveiller',
+                  'qb-stat__n">—</div><div class="qb-stat__l">fidélité · non calculée'):
+        assert value in tiles
+    assert any("Avec 2 copies, ces chiffres sont indicatifs" in m.value for m in at.markdown)
 
 
 def test_refresh_rereads_the_gradebook_that_reruns_otherwise_keep_in_cache():
