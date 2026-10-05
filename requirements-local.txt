@@ -1,0 +1,7 @@
+# Extra dependencies for LLM_PROVIDER=local (Qwen2.5-Instruct, 4-bit on an NVIDIA GPU).
+# Install PyTorch with CUDA first (https://pytorch.org/get-started/locally/), then:
+transformers>=4.44
+accelerate>=0.33
+bitsandbytes>=0.43
+# Optional: t-SNE for the course map (PCA is used without it)
+scikit-learn>=1.4
